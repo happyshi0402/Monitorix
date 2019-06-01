@@ -1,4 +1,108 @@
-3.N.N  - DD-MMM-2017
+3.NN.N - DD-MMM-2019
+====================
+- Added a complete graph to support PHP-FPM statistics ('phpfpm.pm'). [#167]
+- Completely rewritten the 'gensens.pm' module which includes the battery
+  values as its third supported sensor. [#170]
+- Added a warning if a process vanished during the accouting in 'process.pm'
+- Added the ability, in the alerts of 'gensens.pm', to support a range of two
+  values, separated by a dash, in the threshold. [#221]
+- Added the ability, in the alerts of 'ambsens.pm', to support a range of two
+  values, separated by a dash, in the threshold. [#221]
+- Added support for FreeBSD NFS Server stats. [#238]
+- Added the new option 'rrdtool_extra_options' to be able to include RRDtool
+  extra options on every graph.
+  	(suggested by Greg Ogonowski, greg AT indexcom.com)
+- Added the new option 'subject_prefix' in 'emailreports.pm' to be able to
+  set a customized prefix in the Subject of the emails that will be sent.
+- Added the ability to support port ranges in 'port.pm'. [#172]
+- Changed the main loop functionality using now the select() function, instead
+  of the alarm()+pause() pair. This should improve the responsiveness on high
+  system loads. [#230]
+- Changed how the values in 'fail2ban.pm' are shown. Now it shows the Bans as
+  absolute values. The new option 'graph_mode' permits switching between
+  'absolute' (default) and 'rate'. [#241]
+- Changed the way how 'ztool iostat' command get the read/write values of the
+  Operations/Bandwidth graphs. [#242]
+- Fixed the copyright year in 'monitorix.cgi'.
+- Fixed in 'mail.pm to use the option 'mail_log' instead the hard coded path I
+  forgot to remove when adding the Exim support.
+  	(thanks to Jean-Marc Didelot, jm.didelot AT teraneo.fr for pointing this out)
+- Fixed to support to show the usage and disk I/O on filesystem names that
+  contain spaces. [#234]
+- Fixed to ensure that the 'L' option in port.pm is optional.
+- Fixed to make sure that a maximum of 9 values is accepted in the 'graph_0'
+  and 'graph_1' options of 'squid.pm'; warn user otherwise. [#235]
+
+
+3.11.0 - 14-Mar-2019
+====================
+- Added a complete graph to support external ambient sensors ('ambsens.pm').
+  	(suggested by Zdenko Dolar, zdenko.dolar AT gmail.com)
+- Added an advice in monitorix.conf(5) as a reminder that some default values
+  are overwritten in the configuration files on certain systems.
+  	(suggested by Sander Bos)
+- Changed the way how the Used value in Memory graph is calculated. [#204]
+- Changed the alert in 'system.pm' to use the minimum value between the second
+  and the third load averages to obtain a more symmetric curve and a sooner
+  cancellation of the alert.
+  	(suggested by Michael Tosch)
+- Added two new graphs (operations and bandwidth) for each pool in 'zfs.pm' to
+  show iostats. [#190]
+- Removed the 777 permissions bits in docs/monitorix.spec and Makefile for the
+  'imgs/' directory. At the same time, when HTTP built-in is enabled, forced to
+  setup the owner, group and permission bits to that directory every time
+  Monitorix is started.
+  	(thanks to Sander Bos for pointing this out)
+- Added support to include the 'ss' command in 'netstat.pm'. [#196]
+- Added to restart the HTTP built-in every time Monitorix receives the SIGHUP
+  signal. This should fix a truncation in the recently rotated logfile.
+- Added in 'du.pm' the ability to count files in every directory defined. [#112]
+- Added the ability to show all graphs of a single server in Multihost mode,
+  instead of showing only the System Load graph. [#216]
+- Added the ability to show all graphs of all remote servers in Multihost mode,
+  instead of showing only the System Load graphs. [#216]
+- Added the new option 'default_option_when_all' in Multihost mode. [#216]
+- Added in 'ipmi.pm' the ability to save negative values. [#218]
+- Added the ability in the alerts of 'gensens.pm' to specify when the alert will
+  be triggered 'above' or 'below' the threshold. [#221]
+- Added the ability in the alerts of 'ambsens.pm' to specify when the alert will
+  be triggered 'above' or 'below' the threshold. [#221]
+- Drop entropy support for FreeBSD in 'system.pm'. [#226]
+- Added Exim support in 'mail.pm'. [#96]
+- Added an autocheck to control the responsiveness of the HTTP built-in server,
+  and in case of no response then restart it. This is controlled by a new option
+  called 'autocheck_responsiveness' which by default is enabled. This should fix
+  these annoying hangups in the HTTP built-in server.
+- Fixed a bad memory scaling in *BSD systems.
+- Fixed in 'process.pm' to fully honour the option 'netstats_in_bps'.
+- Fixed to force Monitorix to be started at the end of boot in systemd-based
+  systems. This should fix a problem with 'traffacct.pm' and iptables.
+- Fixed the missing declaration of 'allvalues' in 'gensens.pm' which prevented
+  graphs generation if 'show_gaps' option was enabled.
+- Fixed to correctly represent the values in text mode in 'ipmi.pm'.
+- Fixed a missalignment of the MB & CPU temperatures values in 'lmsens.pm'.
+- Fixed to limit the length of the device names in 'fs.pm'.
+- Fixed a missing gap colouring in some zoomed graphs of 'system.pm'.
+- Fixed to save missing values as 'unknown' in 'apcupsd.pm'. [#201]
+- Fixed a XSS vulnerability in CGI variables. [#203]
+	(thanks to Sebastian Gilon from http://testarmy.com/, who pointed this out)
+- Fixed to check if setgid() and setuid() functions were successful before
+  starting the HTTP built-in.
+  	(thanks to Sander Bos for pointing this out)
+- Fixed to disable 'echo' when typing the password in './htpasswd.pl'.
+  	(thanks to Sander Bos for pointing this out)
+- Fixed to set permissions 0600 to log files.
+  	(thanks to Sander Bos for pointing this out)
+- Fixed in 'zfs.pm' the way how is collected pool's data.
+	(thanks to Derek Dongray, derek AT valedon.co.uk)
+- Fixed in HTTP built-in to force authentication (when enabled) always, even on
+  non-existing pages.
+  	(thanks to Sander Bos for pointing this out)
+- Fixed to load correctly the file 'monitorix.conf.path' when 'monitorix.cgi' is
+  called from the command line outside of its own directory. [#218]
+
+
+3.10.0 - 25-Sep-2017
 ====================
 - Added a complete graph for IPMI sensors using the 'ipmitool' command.
   	(suggested by Frank Dijcks, fd AT fdsystems.nl)
@@ -13,16 +117,44 @@
   in bytes, so the y-axis will scale accordingly.
 - Changed to be more thickness the lines of Greylisting graph in 'mail.pm'.
 - Changed the colors of the main graph in 'ftp.pm'.
+- Introduced the option 'enable_parallelizing' in order to speed up the graph
+  generation in multi-core systems.
+- Added a new option in 'port.rrd' to enable/disable background red color for
+  each port monitored. [#182]
+- Added to be able to change the real names in the Voltage graph. [#183]
 - From now on the perl-HTTP-Server-Simple module only is loaded if the HTTP
   built-in is enabled. This will permit to separate the HTTP built-in in a
   different package.
+- Added French translation to monthly reports.
+        (thanks to Sylvain Gomez, sylvaingomez AT free.fr)
+- Added support of Postgrey (Postfix Greylisting) in 'mail.pm'. [#102]
+        (thanks to Malte Kubat, M.Kubat AT csb-it.de)
+- Updated to 4.01 the HTML DOCTYPE declarations.
+- Added more precision to the values in 'gensens.pm'.
+- Added string encoding to avoid the message 'Wide character in print at
+  ./monitorix.cgi line ...'. [#186]
+- Added to force a standard locale in 'port.pm'. in order to be able for
+  Monitorix to read the output of system commands (netstat, ...). [#186]
+- Added the new option 'stats_rate' in 'mail.pm' to be able to choose between
+  'real' (new default) and 'per_second'.
+- Added the ability to include an alert for each defined sensor in 'gensens.pm'.
+- Added the ability to include an alert for each defined sensor in 'hptemp.pm'.
+- Added the ability to include an alert for each defined sensor in 'ipmi.pm'.
+- Added alert capabilities to 'lmsens.pm'. [#171]
+- Added the ability to include an alert for each defined sensor in 'nvidia.pm'.
+- Added the ability to monitor unlimited network interfaces in 'net.pm'. [#188]
+- Added active and inactive memory values in 'system.pm'.
 - Fixed an undeclared global symbol "$imgfmt_lc" in 'traffacct.pm'.
 - Fixed the MIME type of graphs in 'emailreports.pm' and in 'traffacct.pm' to
   honor the 'image_format' option. [#174]
+- Make whole word and radio button clickable. [#185]
 - Fixed in 'emailreports.pm' to name each attached graph correctly.
 - Fixed the message 'Odd number of elements in hash assignment' in
   HTTPServer.pm line 58, generated by a malformed line in the 'htpasswd' file.
   Now it warns about such malformed line in the HTTP built-in log.
+- Fixed to honour the change of names in the zoomed in graph of Cores. [#183]
+- Fixed the title in the header of the page to match with the current 'when='
+  value.
 
 
 3.9.0  - 14-Oct-2016

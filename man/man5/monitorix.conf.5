@@ -1,9 +1,9 @@
 .\" Monitorix manpage.
-.\" Copyright (C) 2005-2016 by Jordi Sanfeliu <jordi@fibranet.cat>
+.\" Copyright (C) 2005-2019 by Jordi Sanfeliu <jordi@fibranet.cat>
 .\"
 .\" This is the man page for the monitorix.conf configuration file.
 .\"
-.TH monitorix.conf 5 "Oct 2016" 3.9.0 "Monitorix configuration file"
+.TH monitorix.conf 5 "Mar 2019" 3.11.0 "Monitorix configuration file"
 .SH NAME
 monitorix.conf \- Configuration file for Monitorix.
 .SH DESCRIPTION
@@ -15,6 +15,8 @@ Every time \fBmonitorix\fP is started it reads the configuration file from the p
 .P
 It also creates a file called \fI<base_dir>/cgi/monitorix.conf.path\fP that includes the absolute path of the configuration file. This file will be read by \fBmonitorix.cgi\fP to determine the exact location of the configuration file.
 .SH CONFIGURATION OPTIONS
+IMPORTANT NOTE: these options have default values that might vary depending on your operating system. Please check the configuration files in \fI/etc/monitorix/conf.d/\fP.
+.P
 Blank lines are ignored, and whitespace before and after a token or value is ignored as well as tabulators, although a value can contain whitespace within. Lines which begin with a # are considered comments and ignored.
 .P
 If you want to comment out a large block you can use C-style comments. A /* signals the begin of a comment block and the */ signals the end of the comment block.
@@ -216,6 +218,16 @@ It will show a back arrow in the upper-left corner and it is specially useful fo
 Default value: \fIn\fP
 .RE
 .P
+.BI rrdtool_extra_options
+.RS
+This option permits create a comma-separated list of RRDtool options that will be included in all graphs. This is specially useful if you want to take advantage of an specific RRDtool graphics option.
+.P
+An example would be:
+.P
+.br
+	rrdtool_extra_options = "--grid-dash=1:0, --no-legend"
+.RE
+.P
 .BI base_dir
 .RS
 This is the absolute path to the directory where all the web elements are located:
@@ -269,7 +281,7 @@ This is the URL prefix that Monitorix utilizes when refering to \fBmonitorix.cgi
 .P
 Default value: \fI/monitorix-cgi\fP
 .RE
-.SS Built-in HTTP server
+.SS HTTP built-in server
 .BI enabled
 .RS
 This enables or disables the HTTP server that Monitorix has built-in. This is specially useful for system administrators that don't want to install a web server (Apache, Lighttpd, Nginx, etc.) to see the Monitorix graphs.
@@ -331,11 +343,20 @@ Default value:
 .P
 .BI https_url
 .RS
-This will force to use the prefix \fIhttps://\fP in all links. This is special useful if you plan to use a reverse-proxy HTTPS server in front of the Monitorix built-in HTTP.
+This will force to use the prefix \fIhttps://\fP in all links. This is special useful if you plan to use a reverse-proxy HTTPS server in front of the Monitorix HTTP built-in server.
 .P
-Default value: n
+Default value: \fIn\fP
 .RE
-.SS Built-in HTTP server with access authentication
+.P
+.BI autocheck_responsiveness
+.RS
+There is a well known problem with the HTTP built-in server that Monitorix implements using the Perl module 'HTTP::Server::Simple'. It looks like it's pretty weak to the common attacks that any web server receives every day. As a consequence of that, it just hangs, and when you want to see the stats of your server, you just see your browser waiting for a response that never comes, which ends up with a timeout. In these cases, you are forced to login to your server and restart Monitorix, in order to refresh the HTTP built-in server.
+.P
+So in order to mitigate (hopefully) all this annoying hangups, this options acts like an autocheck to control the responsiveness of the HTTP server on every minute, and in case of no response then it will be restarted automatically.
+.P
+Default value: \fIy\fP
+.RE
+.SS HTTP built-in server with access authentication
 .BI enabled
 .RS
 This enables or disables the authentication mechanism to control access to pages and other resources. The only allowed mechanism is Basic and uses the 401 status code and the WWW-Authenticate response header.
@@ -431,7 +452,7 @@ Default value: \fI/var/log/proftpd/access.log\fP
 .P
 .BI fail2ban_log
 .RS
-This is the path to the Fail2ban log file. Monitorix uses this file to report IP addresses banned.
+This is the path to the Fail2ban log file. Monitorix uses this file only if the option \fBgraph_mode\fP has the value \fIrate\fP.
 .P
 Default value: \fI/var/log/fail2ban.log\fP
 .RE
@@ -489,12 +510,16 @@ Default value: \fIn\fP
 .RS
 This enables or disables the monitoring of each graph. Placing a \fIy\fP on a desired graph and restarting Monitorix will automatically create the RRD file for that graph and start gathering information according to its settings.
 .RE
-.SS System load average and usage (system.rrd)
+.SS System load average and usage (system.pm)
+This graph shows information about system load average (classical UNIX triplet), memory allocation, active processes (on Linux brought directly from the /proc directory), entropy and the system uptime.
+.P
 .BI loadavg_enabled
 .RS
 This section enables or disables the alert capabilities for this graph. Only the alert for the average CPU load is currently implemented. It works as follows:
 .P
-The CPU load average uses the third value (the one that represents the last 15 minutes of the load average), and if it reaches the \fBloadavg_threshold\fP value for the interval of time defined in \fBloadavg_timeintvl\fP, Monitorix will execute the external alert script defined in \fBloadavg_script\fP.
+This alert uses the minimum value between the second and the third load averages (those that represent the last 5 and 15 minutes), and if it reaches the \fBloadavg_threshold\fP value for the interval of time defined in \fBloadavg_timeintvl\fP, Monitorix will execute the external alert script defined in \fBloadavg_script\fP.
+.P
+The idea to use \fImin(load5, load15)\fP is to obtain a more symmetric curve and a sooner cancellation of the alert.
 .P
 The default Monitorix installation includes an example of a shell-script alert called \fBmonitorix-alert.sh\fP which you can use as a base for your own script.
 .P
@@ -531,7 +556,7 @@ It will receive the following three parameters:
 .P
 Default value: \fI/path/to/script.sh\fP
 .RE
-.SS Global kernel usage (kern.rrd)
+.SS Global kernel usage (kern.pm)
 Note that the VFS graph is just informative of how the kernel is balancing its tables.
 .BI graph_mode
 .RS
@@ -544,7 +569,7 @@ Default value: \fIr\fP
 .RS
 This is the list of values offered in modern Linux kernels. Older Linux kernels or other Operating Systems may not have all of them. Placing a \fIy\fP or an \fIn\fP will enable or disable the value in the graph.
 .RE
-.SS Kernel usage per processor (proc.rrd)
+.SS Kernel usage per processor (proc.pm)
 .BI max
 .RS
 This is the number of processors or cores that your system has. There is no limit, however keep in mind that every time this number is changed Monitorix will resize the \fIproc.rrd\fP file accordingly, removing all historical data.
@@ -587,7 +612,7 @@ This option will completely enable or disable the legend in the processor graphs
 .P
 Default value: \fIy\fP
 .RE
-.SS HP ProLiant System Health (hptemp.rrd)
+.SS HP ProLiant System Health (hptemp.pm)
 .BI list
 .RS
 This list will hold the defined temperature sensors for each graph. You must have installed the command \fIhplog\fP that comes with HP ProLiant System Health Application and Command Line Utilities.
@@ -654,7 +679,44 @@ ID     TYPE        LOCATION      STATUS    CURRENT  THRESHOLD
 </list>
 .RE
 .RE
-.SS LM-Sensors and GPU temperatures (lmsens.rrd)
+.P
+.BI alerts
+.RS
+This optional list enables the alert capabilities for this graph and complements with the \fBlist\fP option. Each alert has three fields separated by comma: the \fItime interval\fP, the \fIthreshold\fP and the path to the \fIscript\fP to be executed.
+.P
+The \fItime interval\fP is the period of time (in seconds) that the \fIthreshold\fP needs to be exceeded before the external script is executed.
+.P
+The \fIthreshold\fP is the temperature that needs to be reached or exceeded within the specified time in \fItime interval\fP to execute the external script.
+.P
+The \fIscript\fP is the full path name of the script that will be executed by this alert.
+.P
+Each defined sensor has its own alert.
+.P
+The default Monitorix installation includes an example of a shell-script alert called \fImonitorix-alert.sh\fP which you can use as a base for your own script.
+.P
+The following is an example of an alert defined for the first temperature sensor:
+.P
+.RS
+<alerts>
+.br
+	2 = 3600, 40, /path/to/script.sh
+.br
+</alerts>
+.P
+.RE
+Such alert means that if the value of the sensor number 2 reaches or exceeds 40 during at least one hour (3600 seconds) the script in \fI/path/to/script.sh\fP will be executed.
+.P
+The external script will receive the following arguments:
+.P
+.RS
+1st - the value defined as \fItime interval\fP.
+.br
+2nd - the value defined as \fIthreshold\fP.
+.br
+3rd - the value of the sensor.
+.P
+.RE
+.SS LM-Sensors and GPU temperatures (lmsens.pm)
 .BI list
 .RS
 In this list you may specify the sensors you want to monitor with the same names as they appear in your \fIsensors\fP(1) command.
@@ -778,7 +840,7 @@ Up to 9 \fIgpu\fP keys (from gpu0 to gpu8).
 .P
 .BI desc
 .RS
-This list complements the \fBlist\fP option only for the graphs: MB and CPU temperatures, Fans speeds and GPU temperatures. It basically allows you to change the name that will appear in the graph, hiding the real name of the sensor. If no association is defined, then Monitorix will display the name of the key (left side) in the \fBdesc\fP option (in uppercase).
+This list complements the \fBlist\fP option. It basically allows you to change the name that will appear in the graph, hiding the real name of the sensor. If no association is defined, then Monitorix will display the name of the key (left side) in the \fBdesc\fP option (in uppercase in some graphs).
 .P
 .RS
 <desc>
@@ -793,12 +855,50 @@ This list complements the \fBlist\fP option only for the graphs: MB and CPU temp
 .RE
 .P
 Please note that in the default graph all names are limited to 5 characters in order to fit up to 9 different values. In the zoomed graphs the limit is 8 characters.
-.SS Generic sensors statistics (gensens.rrd)
-This graph is able to monitor up to 9 temperatures and CPU frequencies which, depending of your machine, should appear in the \fI/sys/devices\fP directory.
+.RE
+.P
+.BI alerts
+.RS
+This optional list enables the alert capabilities for this graph and complements with the \fBlist\fP option. Each alert has three fields separated by comma: the \fItime interval\fP, the \fIthreshold\fP and the path to the \fIscript\fP to be executed.
+.P
+The \fItime interval\fP is the period of time (in seconds) that the \fIthreshold\fP needs to be exceeded before the external script is executed.
+.P
+The \fIthreshold\fP is the temperature or volts, or whatever that needs to be reached or exceeded within the specified time in \fItime interval\fP to execute the external script.
+.P
+The \fIscript\fP is the full path name of the script that will be executed by this alert.
+.P
+Each defined sensor has its own alert.
+.P
+The default Monitorix installation includes an example of a shell-script alert called \fImonitorix-alert.sh\fP which you can use as a base for your own script.
+.P
+The following is an example of an alert defined for the first temperature sensor:
+.P
+.RS
+<alerts>
+.br
+	core0 = 3600, 40, /path/to/script.sh
+.br
+</alerts>
+.P
+.RE
+Such alert means that if the value of the sensor core0 reaches or exceeds 40 during at least one hour (3600 seconds) the script in \fI/path/to/script.sh\fP will be executed.
+.P
+The external script will receive the following arguments:
+.P
+.RS
+1st - the value defined as \fItime interval\fP.
+.br
+2nd - the value defined as \fIthreshold\fP.
+.br
+3rd - the value of the sensor.
+.P
+.RE
+.SS Generic sensors statistics (gensens.pm)
+This graph helps to monitor up to three (so far) different sensors: temperatures, CPU frequencies and battery status which, depending of your machine, they should appear in the \fI/sys\fP directory.
 .P
 .BI list
 .RS
-This is a fixed list that can only hold two keys (0 and 1). Each key though can hold up to 9 different entries separated by comma which corresponds to the names of the sensors present in your computer. The key 0 is only for temperature sensors and the key 1 is for CPU frequencies. All this is hard-coded and a bit rigid currently but it might change in the future.
+This is a list of an unlimited number of groups to define the sensors to monitor. Each group is numbered starting from 0, and each one can hold up to 9 different entries separated by comma which corresponds to the names of the sensors present in your computer that you want to monitor. This module is capable to identify the type of the group by searching the substrings \fItemp\fP, \fIcpu\fP and \fIbat\fP, so it will put automatically the vertical label in the graph accordingly (\fICelsius\fP or \fIFahrenheit\fP, \fIHz\fP or \fICharge\fP respectively). Of course, it cannot supports mixed sensors in a same group. For example, if you need to monitor more than 9 temperature sensors just create a new group in \fBlist\fP.
 .P
 An example would be:
 .P
@@ -809,12 +909,30 @@ An example would be:
 .br
 	1 = cpu0, cpu1, cpu2, cpu3
 .br
+	2 = bat0
+.br
 </list>
+.RE
+.RE
+.BI title
+.RS
+In this option you must associate a title with the group number specified in \fBlist\fP. This is the title that will appear as the name of the graph. Following the settings in the example above:
+.P
+.RS
+<title>
+.br
+	0 = Temperatures
+.br
+	1 = CPU frequency
+.br
+	2 = Battery status
+.br
+</title>
 .RE
 .RE
 .BI desc
 .RS
-In this option you must associate the complete pathname of the file from where to get the value of each entry defined in the \fBlist\fP. Following the settings in the example above:
+In this option you must associate the complete pathname of the file from where to get the value of each entry defined in the \fBlist\fP option. Following the settings in the example above:
 .P
 .RS
 <desc>
@@ -831,12 +949,14 @@ In this option you must associate the complete pathname of the file from where t
 .br
 	cpu3 = /sys/devices/system/cpu/cpu3/cpufreq/scaling_cur_freq
 .br
+	bat0 = /sys/class/power_supply/BAT0/capacity
+.br
 </desc>
 .RE
 .RE
 .BI unit
 .RS
-With this option you can define the order of magnitude associated to a specific value. This is used in both temperatures and CPU frequencies, since this kind of temperature sensors tend to give the value in 1000ths of degrees Celsius. In the case of CPU frequencies the values come in Mhz which means that they need to be converted to Hz by multiplying them by 1000. Therefore you can define something like this:
+With this option you can define the order of magnitude associated to a specific value. This is used in both temperatures and CPU frequencies, since this kind of temperature sensors tend to give the value in 1000ths of degrees Celsius. In the case of CPU frequencies the values come in Mhz which means that they need to be converted to Hz by multiplying them by 1000. Since the battery value represents a percentage, it doesn't need any special calculation. Therefore you can define something like this:
 .P
 .RS
 <unit>
@@ -852,6 +972,8 @@ With this option you can define the order of magnitude associated to a specific 
 	cpu2 = 0.001
 .br
 	cpu3 = 0.001
+.br
+	bat0 = 1
 .br
 </unit>
 .RE
@@ -875,12 +997,63 @@ With this option you can optionally rename any of the sensor names defined in th
 .br
 	cpu3 = CPU3 frequency
 .br
+	bat0 = Battery 0
+.br
 </map>
 .RE
 .P
 All names are limited to 20 characters.
 .RE
-.SS IPMI sensor statistics (ipmi.rrd)
+.P
+.BI alerts
+.RS
+This optional list enables the alert capabilities for this graph and complements with the \fBlist\fP option. Each alert has four fields separated by comma: the \fItime interval\fP, the \fIthreshold\fP, the path to the \fIscript\fP to be executed and \fIwhen\fP the alert must be triggered. the last field is optional.
+.P
+The \fItime interval\fP is the period of time (in seconds) that the \fIthreshold\fP needs to be exceeded before the external script is executed.
+.P
+The \fIthreshold\fP is the value (temperature, Hz or battery charge) that needs to be reached or exceeded within the specified time in \fItime interval\fP to execute the external script. It can be specified as a unique value or as a range of two values separated by a dash.
+.P
+The \fIscript\fP is the full path name of the script that will be executed by this alert.
+.P
+The \fIwhen\fP value specifies when the alert must be triggered (\fIabove\fP or \fIbelow\fP) the threshold, being \fIabove\fP the default value when it's not specified. This forth parameter is only relevant when the \fIthreshold\fP value is not a range.
+.P
+Each defined sensor has its own alert.
+.P
+The default Monitorix installation includes an example of a shell-script alert called \fImonitorix-alert.sh\fP which you can use as a base for your own script.
+.P
+The following is an example of an alert defined for the first temperature sensor:
+.P
+.RS
+<alerts>
+.br
+	temp0 = 3600, 40, /path/to/script.sh, above
+.br
+	temp1 = 3600, 10, /path/to/script.sh, below
+.br
+	temp2 = 3600, 40-60, /path/to/script.sh
+.br
+</alerts>
+.P
+.RE
+The first alert means that if the value of the sensor temp0 exceeds above 40 during at least one hour (3600 seconds) the script in \fI/path/to/script.sh\fP will be executed.
+.P
+The second alert means that if the value of the sensor temp1 exceeds below 10 during at least one hour (3600 seconds) the script in \fI/path/to/script.sh\fP will be executed.
+.P
+The third alert means that if the value of the sensor temp2 exceeds either below 40 or above of 60 during at least one hour (3600 seconds) the script in \fI/path/to/script.sh\fP will be executed.
+.P
+The external script will receive the following arguments:
+.P
+.RS
+1st - the value defined as \fItime interval\fP.
+.br
+2nd - the value defined as \fIthreshold\fP.
+.br
+3rd - the value of the sensor.
+.br
+4th - the direction or when that alert was triggered by (above or below).
+.P
+.RE
+.SS IPMI sensor statistics (ipmi.pm)
 This graph is able to monitor an unlimited number of IPMI sensors (temperatures, fans and voltages).
 .P
 .BI list
@@ -913,7 +1086,7 @@ The maximum number of sensors allowed for each group is 9.
 .P
 .BI units
 .RS
-This is the type of sensor in each group. It's important to not mix different type of sensors in a same group.
+This is the type of sensor in each group. It's important to not mix different type of sensors in a same group. This value is informative only, it's mostly used as a title for the y-axis in the graphs and should match with the output of the \fIipmitool\fP command.
 .RE
 .P
 .BI map
@@ -921,6 +1094,45 @@ This is the type of sensor in each group. It's important to not mix different ty
 This list complements the \fBdesc\fP option. It basically allows you to change the name that will appear in the graph, hiding the real name of the sensor. If no association is defined, then Monitorix will display the name specified in the \fBdesc\fP option. Note, this only works in names that don't include whitespaces.
 .RE
 .P
+.BI alerts
+.RS
+This optional list enables the alert capabilities for this graph and complements with the \fBdesc\fP option. Each alert has three fields separated by comma: the \fItime interval\fP, the \fIthreshold\fP and the path to the \fIscript\fP to be executed.
+.P
+The \fItime interval\fP is the period of time (in seconds) that the \fIthreshold\fP needs to be exceeded before the external script is executed.
+.P
+The \fIthreshold\fP is the temperature that needs to be reached or exceeded within the specified time in \fItime interval\fP to execute the external script.
+.P
+The \fIscript\fP is the full path name of the script that will be executed by this alert.
+.P
+Each defined sensor has its own alert.
+.P
+The default Monitorix installation includes an example of a shell-script alert called \fImonitorix-alert.sh\fP which you can use as a base for your own script.
+.P
+The following is an example of an alert defined for the first temperature sensor:
+.P
+.RS
+<alerts>
+.br
+	CPU_Temp = 3600, 40, /path/to/script.sh
+.br
+</alerts>
+.P
+Notice that the spaces in the sensor's name must be converted to underscores, since a variable can hold spaces in its name.
+.P
+.RE
+Such alert means that if the value of the sensor CPU_Temp reaches or exceeds 40 during at least one hour (3600 seconds) the script in \fI/path/to/script.sh\fP will be executed.
+.P
+The external script will receive the following arguments:
+.P
+.RS
+1st - the value defined as \fItime interval\fP.
+.br
+2nd - the value defined as \fIthreshold\fP.
+.br
+3rd - the value of the sensor.
+.P
+.RE
+.RE
 .BI graphs_per_row
 .RS
 This is the number of graphs that will be put in a row.
@@ -941,7 +1153,106 @@ extra_args = -H <remote_ip> -U root -P <password>
 .RS
 Default value: \fInone\fP
 .RE
-.SS NVIDIA temperatures and usage (nvidia.rrd)
+.SS Ambient sensor statistics (ambsens.pm)
+This graph is able to monitor an unlimited number of ambient sensors (temperatures, humidity, barometer, etc.).
+.P
+.BI list
+.RS
+This is a comma-separated list that describes the type of sensors in \fBdesc\fP. Put one description for each type. For every type specified you need to specify its sensors in the \fBdesc\fP option. Each one most be referenced as a numeric value starting from zero in the \fBdesc\fP option. There you will define all the sensors than come with that type of sensor. 
+.P
+WARNING: Every time the number of entries in this option changes, Monitorix will resize the \fIambsens.rrd\fP file accordingly, removing all historical data.
+.P
+An example would be:
+.P
+list = Ambient temperature, Humidity
+.RE
+.P
+.BI desc
+.RS
+This is a list of sensors per type defined. The name is irrelevant. 
+.P
+<desc>
+.br
+	0 = at1, at2, at3
+.br
+	1 = h0
+.br
+</desc>
+.P
+The maximum number of sensors allowed for each type is 9.
+.RE
+.P
+.BI units
+.RS
+This is the class of sensor for each type. It's important to not mix different type of sensors in a same group. This value is informative only, it's mostly used as a title for the y-axis in the graphs.
+.RE
+.P
+.BI cmd
+.RS
+This list complements the \fBdesc\fP option. It basically allows you to associate a script or program that will be executed to retrieve the value for each sensor.
+.RE
+.P
+.BI map
+.RS
+This list complements the \fBdesc\fP option. It basically allows you to change the name that will appear in the graph, hiding the real name of the sensor. If no association is defined, then Monitorix will display the name specified in the \fBdesc\fP option. Note, this only works in names that don't include whitespaces.
+.RE
+.P
+.BI alerts
+.RS
+This optional list enables the alert capabilities for this graph and complements with the \fBlist\fP option. Each alert has four fields separated by comma: the \fItime interval\fP, the \fIthreshold\fP, the path to the \fIscript\fP to be executed and \fIwhen\fP the alert must be triggered. the last field is optional.
+.P
+The \fItime interval\fP is the period of time (in seconds) that the \fIthreshold\fP needs to be exceeded before the external script is executed.
+.P
+The \fIthreshold\fP is the value (temperature, etc.) that needs to be reached or exceeded within the specified time in \fItime interval\fP to execute the external script. It can be specified as a unique value or as a range of two values separated by a dash.
+.P
+The \fIscript\fP is the full path name of the script that will be executed by this alert.
+.P
+The \fIwhen\fP value specifies when the alert must be triggered (\fIabove\fP or \fIbelow\fP) the threshold, being \fIabove\fP the default value when it's not specified. This forth parameter is only relevant when the \fIthreshold\fP value is not a range.
+.P
+Each defined sensor has its own alert.
+.P
+The default Monitorix installation includes an example of a shell-script alert called \fImonitorix-alert.sh\fP which you can use as a base for your own script.
+.P
+The following is an example of an alert defined for the first temperature sensor:
+.P
+.RS
+<alerts>
+.br
+	temp0 = 3600, 40, /path/to/script.sh, above
+.br
+	temp1 = 3600, 10, /path/to/script.sh, below
+.br
+	temp2 = 3600, 40-60, /path/to/script.sh
+.br
+</alerts>
+.P
+.RE
+The first alert means that if the value of the sensor temp0 exceeds above 40 during at least one hour (3600 seconds) the script in \fI/path/to/script.sh\fP will be executed.
+.P
+The second alert means that if the value of the sensor temp1 exceeds below 10 during at least one hour (3600 seconds) the script in \fI/path/to/script.sh\fP will be executed.
+.P
+The third alert means that if the value of the sensor temp2 either exceeds below 40 or above of 60 during at least one hour (3600 seconds) the script in \fI/path/to/script.sh\fP will be executed.
+.P
+The external script will receive the following arguments:
+.P
+.RS
+1st - the value defined as \fItime interval\fP.
+.br
+2nd - the value defined as \fIthreshold\fP.
+.br
+3rd - the value of the sensor.
+.br
+4th - the direction or when that alert was triggered by (above or below).
+.P
+.RE
+.RE
+.BI graphs_per_row
+.RS
+This is the number of graphs that will be put in a row.
+.P
+Default value: \fI2\fP
+.RE
+.SS NVIDIA temperatures and usage (nvidia.pm)
 This graph requires to have installed the official NVIDIA drivers.
 .P
 .BI max
@@ -952,7 +1263,7 @@ The maximum allowed is 9.
 .P
 Default value: \fI1\fP
 .RE
-.SS Disk drive temperatures and health (disk.rrd)
+.SS Disk drive temperatures and health (disk.pm)
 This graph is able to monitor an unlimited number of disk drives.
 .P
 .BI list
@@ -1072,7 +1383,7 @@ This option changes this behavior and permits to continue working even if the de
 .P
 Default value: \fIn\fP
 .RE
-.SS Filesystem usage and I/O activity (fs.rrd)
+.SS Filesystem usage and I/O activity (fs.pm)
 This graph is able to monitor an unlimited number of filesystems.
 .P
 .BI list
@@ -1178,12 +1489,12 @@ The following is an example of an alert defined for the root filesystem:
 .RS
 <alerts>
 .br
-	/ = 3600, 98, /path/to/script
+	/ = 3600, 98, /path/to/script.sh
 .br
 </alerts>
 .P
 .RE
-Such alert means that if the percentage of disk space used in the root filesystem reaches or exceeds 98 (more than 98) during at least one hour (3600 seconds) the script in \fI/path/to/script\fP will be executed.
+Such alert means that if the percentage of disk space used in the root filesystem reaches or exceeds 98 (more than 98) during at least one hour (3600 seconds) the script in \fI/path/to/script.sh\fP will be executed.
 .P
 The external script will receive the following arguments:
 .P
@@ -1195,7 +1506,7 @@ The external script will receive the following arguments:
 3rd - the filesystem disk usage.
 .P
 .RE
-.SS ZFS statistics (zfs.rrd)
+.SS ZFS statistics (zfs.pm)
 This graph is able to monitor an unlimited number of pools.
 .P
 .BI max_pools
@@ -1209,7 +1520,7 @@ Default value: \fI5\fP
 .RS
 This is a comma-separated list of pool names. The number of pool names defined here can't be greater than the number defined in \fBmax_pools\fP.
 .RE
-.SS Directory usage statistics (du.rrd)
+.SS Directory usage statistics (du.pm)
 This graph is able to monitor the usage of an unlimited number of directories.
 .P
 IMPORTANT NOTE: The \fIdu\fP command makes intensive disk I/O access that might slow down the whole system. Moreover, continued executions of this command will affect the buffer cache mechanism and this will also increase the system response time.
@@ -1240,6 +1551,27 @@ This is a list of directories per group defined.
 The maximum number of directories allowed for each group is 9.
 .RE
 .P
+.BI type
+.RS
+This specifies the information that will be presented for each directory specified in each list. It accepts two possible values:
+.P
+.RS
+\fIsize\fP   for the directory size (which is the default option).
+.br
+\fIfiles\fP  for the number of files inside the directory.
+.RE
+.P
+An example would be:
+.P
+<type>
+.br
+	0 = size
+.br
+	1 = files
+.br
+</type>
+.RE
+.P
 .BI dirmap
 .RS
 This list complements the \fBdesc\fP option. It basically allows you to change the name that will appear in the graph, hiding the real name of the directory. If no association is defined, then Monitorix will display the name specified in the \fBdesc\fP option.
@@ -1261,7 +1593,15 @@ extra_args = "-x"
 .RE
 .P
 IMPORTANT NOTICE: Keep in mind that including certain flags like '-h' (which gives results in human readable format) could make Monitorix unable to interpret the results.
-.SS Network traffic and usage (net.rrd)
+.SS Network traffic and usage (net.pm)
+.P
+.BI max
+.RS
+This is the maximum number of network interfaces that you can define in \fBlist\fP. There is no limit, but keep in mind that every time this number changes, Monitorix will resize the \fInet.rrd\fP file accordingly, removing all historical data.
+.P
+Default value: \fI10\fP
+.P
+.RE
 .BI list
 .RS
 This is a comma-separated list of network interfaces that you may want to monitor. An example would be:
@@ -1270,8 +1610,6 @@ This is a comma-separated list of network interfaces that you may want to monito
 list = eth0, eth1
 .br
 .RE
-.P
-The maximum number of entries allowed is 10.
 .RE
 .P
 .BI desc
@@ -1289,19 +1627,29 @@ Put one description for each interface listed. An example would be:
 .br
 </desc>
 .RE
-.P
-The maximum number of entries allowed is 10.
 .RE
 .P
 .BI gateway
 .RS
 This is where the network interface that acts as the gateway for this server is defined. This is mainly used if you plan to monitor network traffic usage of your devices/networks using the \fBtraffacct\fP graph below.
 .RE
-.SS Netstat statistics (netstat.rrd)
+.SS Netstat statistics (netstat.pm)
 This graph shows the state of the all IPv4 and IPv6 network connections.
 .P
-Only the limit and rigid values can be set here.
-.SS Traffic Control statistics (tc.rrd)
+Only the command to be used can be set here, besides the limit and rigid values.
+.P
+.BI cmd
+.RS
+This is the command that will be used to gather statistics. There are two possible values:
+.P
+.RS
+\fIss\fP
+.br
+\fInetstat\fP
+.RE
+.P
+Default value: \fIss\fP
+.SS Traffic Control statistics (tc.pm)
 This graph is able to monitor an unlimited number of network interfaces managed by the \fItc\fP command.
 .P
 .BI list
@@ -1361,7 +1709,7 @@ An example would be:
 </map>
 .RE
 .RE
-.SS Libvirt statistics (libvirt.rrd)
+.SS Libvirt statistics (libvirt.pm)
 This graph is able to monitor an unlimited number of virtual machines managed by Libvirt.
 .P
 .BI cmd
@@ -1453,7 +1801,7 @@ vnet3      network    default    virtio      52:54:00:45:d0:e7
 .br
 .P
 This option also allows you to change the name that will appear in the graph, hiding the real name of the virtual machine. If no association is defined, then Monitorix will display the name specified in the \fBlist\fP option.
-.SS Process statistics (process.rrd)
+.SS Process statistics (process.pm)
 This graph is able to monitor an unlimited number of processes. This graph requires a Linux kernel version 2.6.20 at least to support process I/O accounting. Some systems with older kernels might also have been ported it though.
 .P
 .BI list
@@ -1468,7 +1816,7 @@ Monitorix uses the following command to find the processes listed in this option
 # ps -eo pid,comm,command
 .P
 .RE
-Therefore names in the process list must *EXACTLY* correspond to those in the \fIcomm\fP (or \fIcommand\fP) field of the above command (no substring, no wildcard).
+Therefore names in the process list can be either exactly to the process name as it appears in the \fIcomm\fP columns, or just a substring of the process name that appears in the \fIcommand\fP column.
 .P
 An example of this option would be:
 .P
@@ -1500,7 +1848,7 @@ This list complements the \fBlist\fP option. It basically allows you to change t
 .RE
 .P
 You can define as much entries as you want.
-.SS System services demand (serv.rrd)
+.SS System services demand (serv.pm)
 This graph requires either \fIMailScanner\fP or \fIamavisd-new\fP mail scanners in order to account spam and virus emails.
 .P
 .BI mode
@@ -1515,7 +1863,7 @@ This option toggles the way the System Services Demand data is represented in th
 .P
 Default value: \fIi\fP
 .RE
-.SS Mail statistics (mail.rrd)
+.SS Mail statistics (mail.pm)
 This graph requires either \fIMailScanner\fP or \fIamavisd-new\fP mail scanners in order to account spam and virus emails. Spamassassin and Clamav antivirus are also used for spam and virus email accounting.
 .P
 .BI mta
@@ -1525,6 +1873,8 @@ This option specifies the MTA that Monitorix will use to collect mail statistics
 \fISendmail\fP
 .br
 \fIPostfix\fP
+.br
+\fIExim\fP
 .RE
 .P
 NOTE: the \fIpflogsumm\fP utility is required when using the \fBPostfix\fP MTA.
@@ -1534,14 +1884,36 @@ Default value: \fIsendmail\fP
 .P
 .BI greylist
 .RS
-This option specifies the Greylisting implementation that Monitorix will use to collect statistical information. In the future more Greylisting software will be supported.
+This option specifies the Greylisting implementation that Monitorix will use to collect statistical information. 
 .P
-The currently supported Greylist software is:
+The currently supported Greylisting software is:
 .RS
 \fImilter-greylist\fP
+.br
+\fIpostgrey\fP
 .RE
 .P
+In the case of \fImilter-greylist\fP, Monitorix shows the same data that appears at the end of the file \fIgreylist.db\fP.
+.P
+In the case of \fIPostgrey\fP, Monitorix reads the \fBmail_log\fP file and searches for a specific type of lines. Lines of type "action=greylist, reason=new" appear as Greylisted in the graph. Lines of type "action=greylist, reason=early-retry" appear as Delayed in the graph. Lines of type "action=pass, reason=triplet found" appear as Passed in the graph. And finally, lines of type "action=pass, reason=client whitelist" appear as Whitelisted in the graph.
+.P
 Default value: \fImilter-greylist\fP
+.RE
+.P
+.BI stats_rate
+.RS
+This option only affects the Mail Statistics and the Greylisting graphs, and it specifies the rate in which the values are saved and shown. This option has two possible values:
+.RS
+\fIreal\fP
+.br
+\fIper_second\fP
+.RE
+.P
+If it's set to its default value (\fIreal\fP), it will show the messages as in a 'per minute' rate. Since Monitorix collects data on every minute, this should be the preferred way to see the results.
+.P
+In the other hand, and in order to keep backwards compatibility, if this option is missing in the configuration file, it will act as if it was set up as \fIper_second\fP, which means that the number of messages collected in each minute will be divided by 60.
+.P
+Default value: \fIreal\fP
 .RE
 .P
 .BI delvd_enabled
@@ -1627,7 +1999,7 @@ It will receive the following three parameters:
 .P
 Default value: \fI/path/to/script.sh\fP
 .RE
-.SS Network port traffic (port.rrd)
+.SS Network port traffic (port.pm)
 This graph requires the \fIiptables\fP(8) command and optionally the \fIip6tables\fP(8) command on Linux systems and the \fIipfw\fP command on *BSD systems.
 .P
 .BI max
@@ -1646,36 +2018,52 @@ Default value: \fI24000\fP
 .P
 .BI list
 .RS
-You may define here up to \fBmax\fP network port numbers. If you need to monitor the same network port with TCP and UDP protocols, you can add your own suffix to the port number (e.g: 443t and 443u) in order to distinguish it from the double definition in the <desc> block.
+You may define here up to \fBmax\fP network port numbers. If you need to monitor the same network port with TCP and UDP protocols, you can add your own suffix to the port number (e.g: 443t and 443u) in order to distinguish it from the double definition in the <desc> block. It also support port ranges (e.g: 49152:65534) to be able to monitor the traffic of a number of consecutive ports summarized on a unique graph.
 .P
-If you see a red color in the background of a network port graph, it means that there is not a daemon listening on that port. This can be useful to know if some service gone down unexpectedly.
+If you see a red color in the background of a network port graph, it means that there is not a daemon listening on that port. This can be useful to know if some service gone down unexpectedly. Of course, this is only valid on a single port, not ranged ports.
 .RE
 .P
 .BI desc
 .RS
-This is the option where each network port specified in \fBlist\fP is described. Each port definition consists of five parameters separated by comma: the port description, the network protocol (\fItcp\fP or \fIudp\fP), the connection type (\fIin\fP, \fIout\fP or \fIin/out\fP) and the rigid and limit values.
+This is the option where each network port specified in \fBlist\fP is described. Each port definition consists of six parameters separated by comma:
+.RS
+- an small port description.
+.br
+- the network protocol (\fItcp\fP or \fIudp\fP).
+.br
+- the connection type (\fIin\fP, \fIout\fP or \fIin/out\fP).
+.br
+- the rigid value.
+.br
+- the limit value.
+.br
+- the \fIL\fP optional option which specifies that this port should be listening and Monitorix will advice it, by changing the background color of the graph to red, if finds it down. This option has no effect on ranged ports.
+.RE
 .P
 There is also support (Linux only) for IPv6 network ports activity by using protocol names as \fItcp6\fP or \fIudp6\fP.
 .P
 An example would be:
 .RS
-list = 25, 25ip6, 80, 53
+list = 25, 25ip6, 80, 53t, 53u, 49152:65534
 .br
 <desc>
 .br
-	25 = SMTP, tcp, in/out, 0, 1000
+	25          = SMTP, tcp,  in/out, 0, 1000, L
 .br
-	25ip6 = SMTP, tcp6, in/out, 0, 1000
+	25ip6       = SMTP, tcp6, in/out, 0, 1000, L
 .br
-	80 = HTTP, tcp, in, 0, 1000
+	80          = HTTP, tcp,  in,     0, 1000, L
 .br
-	53 = DNS, udp, in, 0, 1000
+	53t         = DNS,  tcp,  in,     0, 1000, L
+.br
+	53u         = DNS,  udp,  in,     0, 1000, L
+.br
+	49152:65534 = FTP_PSV, tcp, in,   0, 1000
 .br
 </desc>
 .RE
 .P
-As you can see, you cannot use the same port number twice. Instead, you must
-distinguish it with some suffix.
+As you can see, you cannot use the same port number twice. Instead, you must distinguish it with some suffix. Monitorix will automatically extract all the first numeric digits, and will use that value as the network port number.
 .RE
 .P
 .BI graphs_per_row
@@ -1684,9 +2072,9 @@ This is the number of graphs that will be put in a row. Consider the interaction
 .P
 Default value: \fI3\fP
 .RE
-.SS Users using the system (user.rrd)
+.SS Users using the system (user.pm)
 Only the limit and rigid values can be set here.
-.SS FTP statistics (ftp.rrd)
+.SS FTP statistics (ftp.pm)
 This graph supports currently ProFTPD, vsftpd and Pure-FTPd log file formats.
 .P
 For best results with the ProFTPD server I recommend to add the following line in its configuration file:
@@ -1717,7 +2105,7 @@ This option lists the different names (separated by comma) that can adopt the An
 .P
 Default value: \fIanonymous, ftp\fP
 .RE
-.SS Apache statistics (apache.rrd)
+.SS Apache statistics (apache.pm)
 This graph requires that \fImod_status\fP be loaded and \fIExtendedStatus\fP option set to \fIOn\fP in order to collect full status information of the Apache web server.
 .P
 This graph is able to monitor an unlimited number of local and remote Apache web servers.
@@ -1750,12 +2138,12 @@ The following is an example of an alert defined for the local Apache:
 .RS
 <alerts>
 .br
-	http://localhost/server-status?auto = 3600, 5, /path/to/script
+	http://localhost/server-status?auto = 3600, 5, /path/to/script.sh
 .br
 </alerts>
 .P
 .RE
-Such alert means that if the remaining free slots reaches or exceeds 5 (less than 5) during at least one hour (3600 seconds) the script in \fI/path/to/script\fP will be executed.
+Such alert means that if the remaining free slots reaches or exceeds 5 (less than 5) during at least one hour (3600 seconds) the script in \fI/path/to/script.sh\fP will be executed.
 .P
 The external script will receive the following arguments:
 .P
@@ -1767,7 +2155,7 @@ The external script will receive the following arguments:
 3rd - the remaining free slots.
 .P
 .RE
-.SS Nginx statistics (nginx.rrd)
+.SS Nginx statistics (nginx.pm)
 This graph may require adding some lines in the configuration file \fInginx.conf\fP. Please see the \fIREADME.nginx\fP file to determine the exact steps needed to configure Nginx to get status information.
 .P
 This graph requires the \fIiptables\fP(8) command on Linux systems, and the \fIipfw\fP command on *BSD systems.
@@ -1792,7 +2180,7 @@ This is the rule number that Monitorix will use when using the \fIipfw\fP comman
 .P
 Default value: \fI24100\fP
 .RE
-.SS Lighttpd statistics (lighttpd.rrd)
+.SS Lighttpd statistics (lighttpd.pm)
 This graph requires that \fImod_status\fP is loaded in order to collect status information from the Lighttpd web server.
 .P
 This graph is able to monitor an unlimited number of local and remote Lighttpd web servers.
@@ -1805,7 +2193,7 @@ WARNING: Every time the number of entries of this option changes, Monitorix will
 .P
 Default value: \fIhttp://localhost/server-status?auto\fP
 .RE
-.SS MySQL statistics (mysql.rrd)
+.SS MySQL statistics (mysql.pm)
 This graph requires that you create a password protected MySQL user that is NOT granted privileges on any DB.
 .P
 Example:
@@ -1919,7 +2307,7 @@ Note that if you modify the value of \fItmp_table_size\fP in the MySQL configura
 Therefore this value helps to know how many tmp tables go to the disk instead than to the memory. Keep in mind that some large queries, involving TEXT and BLOB columns, are directly written to the disk instead than to the memory, because they would be too big. So you probably will want to avoid having a high % of tmp tables written to the disk, but you will never reach 0% on a big site, and this is fine.
 .br
 Lower is better ... but 0% is not reachable and you should not try to reach it, usually.
-.SS MongoDB statistics (mongodb.rrd)
+.SS MongoDB statistics (mongodb.pm)
 This graph is able to monitor an unlimited number of MongoDB servers.
 .P
 .BI list
@@ -1979,11 +2367,11 @@ This is a comma-separated list of databases to be monitored of the MongoDB serve
 .P
 Default value: \fImydb\fP
 .RE
-.SS Varnish cache statistics (varnish.rrd)
+.SS Varnish cache statistics (varnish.pm)
 This graph monitors a local installation of the Varnish HTTP accelerator.
 .P
 Only the limit and rigid values can be set here.
-.SS PageSpeed Module statistics (pagespeed.rrd)
+.SS PageSpeed Module statistics (pagespeed.pm)
 This graph is able to monitor an unlimited number of PageSpeed installations.
 .P
 .BI list
@@ -1996,7 +2384,7 @@ Default value: \fIhttp://modpagespeed.com/mod_pagespeed_statistics\fP
 .RE
 .P
 For more information please refer to https://developers.google.com/speed/pagespeed/module and http://stackoverflow.com/questions/9115595/what-do-the-mod-pagespeed-statistics-mean
-.SS Squid Proxy Web Cache (squid.rrd)
+.SS Squid Proxy Web Cache (squid.pm)
 .P
 .BI cmd
 .RS
@@ -2015,7 +2403,7 @@ For more information about the list of all the result and status codes, please r
 .P
 Each graph has a limit number of 9 entries.
 .RE
-.SS NFS server statistics (nfss.rrd)
+.SS NFS server statistics (nfss.pm)
 .P
 .BI version
 .RS
@@ -2043,7 +2431,7 @@ These three lists hold the defined NFS server activity statistics to be shown in
 .P
 Each graph has a limit number of 10 entries.
 .RE
-.SS NFS client statistics (nfsc.rrd)
+.SS NFS client statistics (nfsc.pm)
 .P
 .BI version
 .RS
@@ -2085,7 +2473,7 @@ Each graph has the following limit number of entries:
 .br
 \fBgraph_5\fP up to 4 entries.
 .RE
-.SS BIND statistics (bind.rrd)
+.SS BIND statistics (bind.pm)
 This graph requires a BIND server with version 9.5 or higher, and in order to see all statistics provided by BIND you must configure the \fIstatistics-channels\fP option like this:
 .P
 statistics-channels {
@@ -2171,7 +2559,7 @@ This is a comma-separated list of RR (Resource Records) types for each BIND serv
 .P
 The maximum number of RR types allowed for this graph is 20.
 .RE
-.SS NTP statistics (ntp.rrd)
+.SS NTP statistics (ntp.pm)
 This graph is able to monitor an unlimited number of NTP servers.
 .P
 .BI list
@@ -2212,7 +2600,7 @@ extra_args = "-4"
 .P
 Monitorix will add this extra argument to the NTP command which will become as "ntpq -pn -4".
 .RE
-.SS Chrony statistics (chrony.rrd)
+.SS Chrony statistics (chrony.pm)
 This graph is able to monitor an unlimited number of Chrony daemons.
 .P
 .BI list
@@ -2223,7 +2611,7 @@ WARNING: Every time the number of entries in this option changes, Monitorix will
 .P
 Default value: \fIlocalhost\fP
 .RE
-.SS Fail2ban statistics (fail2ban.rrd)
+.SS Fail2ban statistics (fail2ban.pm)
 This graph is able to monitor an unlimited number of Fail2ban jails.
 .P
 .BI list
@@ -2258,7 +2646,14 @@ This is the number of fail2ban graphs that will be put in a row.
 .P
 Default value: \fI2\fP
 .RE
-.SS Icecast Streaming Media Server (icecast.rrd)
+.P
+.BI graph_mode 
+.RS
+This option changes how the values are represented in the graph. It has two possible values: \fIabsolute\fP which is the default, and \fIrate\fP. The former takes the values directly from the command \fIfail2ban-client status <JAIL>\fP and so the values in the graph will appear as absolute. The later option shows the values in a rating format per minute.
+.P
+Default value: \fIabsolute\fP
+.RE
+.SS Icecast Streaming Media Server (icecast.pm)
 This graph is able to monitor an unlimited number of Icecast servers.
 .P
 .BI list
@@ -2289,7 +2684,7 @@ This changes the layout of the listeners graph, the possible values are \fIr\fP 
 .P
 Default value: \fIr\fP
 .RE
-.SS Raspberry Pi sensor statistics (raspberrypi.rrd)
+.SS Raspberry Pi sensor statistics (raspberrypi.pm)
 .P
 For more information please refer to http://elinux.org/RPI_vcgencmd_usage.
 .P
@@ -2321,7 +2716,7 @@ volts = core, sdram_c, sdram_i, sdram_p
 .P
 The maximum number of clocks allowed is 6.
 .RE
-.SS Alternative PHP Cache statistics (phpapc.rrd)
+.SS Alternative PHP Cache statistics (phpapc.pm)
 This graph is able to monitor an unlimited number of PHP-APC installations.
 .P
 .BI list
@@ -2332,7 +2727,7 @@ WARNING: Every time the number of entries in this option changes, Monitorix will
 .P
 Default value: \fIhttp://localhost/apc.php?auto\fP
 .RE
-.SS Memcached statistics (memcached.rrd)
+.SS Memcached statistics (memcached.pm)
 This graph is able to monitor an unlimited number of Memcached installations.
 .P
 .BI list
@@ -2343,7 +2738,86 @@ WARNING: Every time the number of entries in this option changes, Monitorix will
 .P
 Default value: \fIlocalhost:11211\fP
 .RE
-.SS APC UPS statistics (apcupsd.rrd)
+.SS PHP-FPM statistics (phpfpm.pm)
+This graph is able to monitor an unlimited number of PHP-FPM pools.
+.P
+.BI group
+.RS
+This is a list of names (separated by comma) of the groups of pools that you want to monitor. The pools included in each group will be defined in the \fBlist\fP option. You can define unlimited number of groups.
+.P
+WARNING: Every time the number of groups changes, Monitorix will resize the \fIphpfpm.rrd\fP file accordingly, removing all historical data.
+.P
+An example of this option would be:
+.P
+.RS
+<group>
+.br
+	0 = First group of domains
+.br
+	1 = Second group of domains
+.br
+</group>
+.RE
+.RE
+.P
+.BI list
+.RS
+This is a list of pool names that you want to monitor for each group defined in \fBgroup\fP.
+.P
+An example of this option would be:
+.P
+.RS
+<list>
+.br
+	0 = example1, example2, example3
+.br
+	1 = example10, example11
+.br
+</list>
+.RE
+.P
+The maximum number of pools allowed per group is 8.
+.RE
+.P
+.BI desc
+.RS
+This list complements the \fBlist\fP option, it defines where and how Monitorix must gather the statistics for each pool defined.
+.P
+An example of this option would be:
+.P
+.RS
+<desc>
+.br
+	example1 = http://www.example1.com/php_fpm_status
+.br
+	example2 = http://www.example2.com/php_fpm_status
+.br
+	example3 = http://www.example3.com/php_fpm_status
+.br
+	example10 = http://www.example10.com/php_fpm_status
+.br
+	example11 = http://www.example11.com/php_fpm_status
+.br
+</desc>
+.RE
+.RE
+.P
+.BI map
+.RS
+This list also complements the \fBlist\fP option. It basically allows you to change the name that will appear in the graph, hiding the real name of the pool. If no association is defined, then Monitorix will display the name specified in the \fBlist\fP option.
+.P
+An example of this option would be:
+.P
+.RS
+<map>
+.br
+	example1 = DOMAIN4
+.br
+	example12 = DOMAIN55
+.br
+</map>
+.RE
+.SS APC UPS statistics (apcupsd.pm)
 This graph is able to monitor an unlimited number of APC UPS (apcupsd) installations.
 .P
 .BI cmd
@@ -2361,7 +2835,7 @@ WARNING: Every time the number of entries in this option changes, Monitorix will
 .P
 Default value: \fIlocalhost:3551\fP
 .RE
-.SS Network UPS Tools statistics (nut.rrd)
+.SS Network UPS Tools statistics (nut.pm)
 This graph is able to monitor an unlimited number of Network UPS Tools (upsc) installations.
 .P
 .BI list
@@ -2374,7 +2848,7 @@ WARNING: Every time the number of entries in this option changes, Monitorix will
 .P
 Default value: \fIups@localhost\fP
 .RE
-.SS Wowza Media Server (wowza.rrd)
+.SS Wowza Media Server (wowza.pm)
 This graph is able to monitor an unlimited number of Wowza servers.
 .P
 .BI list
@@ -2398,11 +2872,11 @@ This is a comma-separated list of applications configured for every URL specifie
 .P
 The maximum number of applications allowed for each URL is 8.
 .RE
-.SS Devices interrupt activity (int.rrd)
+.SS Devices interrupt activity (int.pm)
 Only the limit and rigid values can be set here.
-.SS Verlihub statistics (verlihub.rrd)
+.SS Verlihub statistics (verlihub.pm)
 This graph monitors the Verlihub software for DC++ network.
-.SS Monitoring the Internet traffic of your LAN (traffacct.rrd)
+.SS Monitoring the Internet traffic of your LAN (traffacct.pm)
 If your server acts as the gateway for a group of PCs, devices or even whole networks in your local LAN, you may want to know how much Internet traffic each one is generating.
 .P
 This graph requires the \fIiptables\fP(8) command on GNU/Linux systems, and the \fIipfw\fP command on *BSD systems.
@@ -2463,7 +2937,7 @@ An example would be:
 </desc
 .RE
 .RE
-.SS Monthly reports of Internet traffic (traffacct.rrd)
+.SS Monthly reports of Internet traffic (traffacct.pm)
 .BI enabled
 .RS
 If this option is set to \fIy\fP, Monitorix will send a report of all the monthly Internet activity of the defined devices in \fBlist\fP to the specified email address on the first day of each month.
@@ -2531,6 +3005,17 @@ If your horizontal screen resolution is pretty wide, you may want to increase th
 Default value: \fI2\fP
 .RE
 .P
+.BI default_option_when_all
+.RS
+If the user has defined a considerable amount of remote servers and it selects the option "\fIAll\fP" in the \fIHostname\fP list and "\fIAll graphs\fP" in the \fIGraph\fP list, the browser may hang for a while due to the huge amount of images to download remotely from different servers.
+.P
+This option prevents precisely that this happens accidentally by setting a default value in the \fIGraph\fP list. Of course, the user is able to change it to "\fIAll graphs\fP" at any moment.
+.P
+The value of this option may be any of the ones that appear in the \fI<graphs>\fP section (near the end) of the \fImonitorix.conf\fP file.
+.P
+Default value: "\fISystem load\fP"
+.RE
+.P
 .BI remotehost_list
 .RS
 This is a comma-separated list with descriptive names of remote servers with Monitorix already installed and working that you plan to monitor from here.
@@ -2560,7 +3045,7 @@ An example would be:
 </remotehost_desc>
 .RE
 .P
-As you can see all these three entries use URLs to designate the location of each remote server. This means that each server most also have been enabled the built-in HTTP server, or have been installed a CGI capable web server like Apache.
+As you can see all these three entries use URLs to designate the location of each remote server. This means that each server most also have been enabled the HTTP built-in server, or have been installed a CGI capable web server like Apache.
 .RE
 .P
 .BI groups
@@ -2634,6 +3119,13 @@ Default value:
 This is the address that will be used as remitent for all the monthly report emails.
 .P
 Default value: \fInoreply@example.com\fP
+.RE
+.P
+.BI subject_prefix
+.RS
+This is a string that will be prefixed in the Subject of all emails that will be sent.
+.P
+Default value: \fIMonitorix:\fP
 .RE
 .P
 .BI hour
@@ -2717,7 +3209,7 @@ This is where you can enter the upper-limit and lower-limit values (separated by
 .SH AUTHOR
 Monitorix is written by Jordi Sanfeliu <jordi@fibranet.cat>
 .SH COPYRIGHT
-Copyright \(co 2005-2016 Jordi Sanfeliu
+Copyright \(co 2005-2019 Jordi Sanfeliu
 .br
 Licensed under the GNU General Public License version 2 (GPLv2).
 .SH SEE ALSO

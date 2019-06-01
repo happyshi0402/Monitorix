@@ -1,7 +1,7 @@
 #
 # Monitorix - A lightweight system monitoring tool.
 #
-# Copyright (C) 2005-2016 by Jordi Sanfeliu <jordi@fibranet.cat>
+# Copyright (C) 2005-2019 by Jordi Sanfeliu <jordi@fibranet.cat>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -228,15 +228,29 @@ sub squid_update {
 		}
 	}
 	close(IN);
-	foreach my $code (my @sl = split(',', $squid->{graph_0})) {
-		$code = trim($code);
+	my @sl = split(',', $squid->{graph_0});
+	if(scalar(@sl) > 9) {
+		logger("$myself: WARNING: a maximum of 9 values is allowed in 'graph_0' option.");
+	}
+	for($n = 0; $n < 9 && $sl[$n]; $n++) {
+		my $code = trim($sl[$n]);
 		$rrdata .= ":";
 		$rrdata .= defined($g12{$code}) ? int($g12{$code}) : 0;
 	}
-	foreach my $code (my @sl = split(',', $squid->{graph_1})) {
-		$code = trim($code);
+	for(; $n < 9; $n++) {
+		$rrdata .= ":0";
+	}
+	@sl = split(',', $squid->{graph_0});
+	if(scalar(@sl) > 9) {
+		logger("$myself: WARNING: a maximum of 9 values is allowed in 'graph_1' option.");
+	}
+	for($n = 0; $n < 9 && $sl[$n]; $n++) {
+		my $code = trim($sl[$n]);
 		$rrdata .= ":";
 		$rrdata .= defined($g12{$code}) ? int($g12{$code}) : 0;
+	}
+	for(; $n < 9; $n++) {
+		$rrdata .= ":0";
 	}
 	$config->{squid_hist}->{'seek_pos'} = $logsize;
 
@@ -444,6 +458,7 @@ sub squid_update {
 
 sub squid_cgi {
 	my ($package, $config, $cgi) = @_;
+	my @output;
 
 	my $squid = $config->{squid};
 	my @rigid = split(',', ($squid->{rigid} || ""));
@@ -466,6 +481,7 @@ sub squid_cgi {
 	my $u = "";
 	my $width;
 	my $height;
+	my @extra;
 	my @riglim;
 	my @tmp;
 	my @tmpz;
@@ -510,6 +526,9 @@ sub squid_cgi {
 	my $IMG_DIR = $config->{base_dir} . "/" . $config->{imgs_dir};
 	my $imgfmt_uc = uc($config->{image_format});
 	my $imgfmt_lc = lc($config->{image_format});
+	foreach my $i (split(',', $config->{rrdtool_extra_options} || "")) {
+		push(@extra, trim($i)) if trim($i);
+	}
 
 	$title = !$silent ? $title : "";
 
@@ -523,21 +542,21 @@ sub squid_cgi {
 	#
 	if(lc($config->{iface_mode}) eq "text") {
 		if($title) {
-			main::graph_header($title, 2);
-			print("    <tr>\n");
-			print("    <td bgcolor='$colors->{title_bg_color}'>\n");
+			push(@output, main::graph_header($title, 2));
+			push(@output, "    <tr>\n");
+			push(@output, "    <td bgcolor='$colors->{title_bg_color}'>\n");
 		}
 		my (undef, undef, undef, $data) = RRDs::fetch("$rrd",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
 			"AVERAGE",
 			"-r $tf->{res}");
 		$err = RRDs::error;
-		print("ERROR: while fetching $rrd: $err\n") if $err;
+		push(@output, "ERROR: while fetching $rrd: $err\n") if $err;
 		my $str;
 		my $line1;
 		my $line2;
 		my $line3;
-		print("    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
+		push(@output, "    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
 		for($n = 0; $n < scalar(my @sl = split(',', $squid->{graph_0})); $n++) {
 			$line2 .= sprintf("%6d", $n + 1);
 			$str .= "------";
@@ -576,9 +595,9 @@ sub squid_cgi {
 		$line1 .= "  Server Traffic";
 		$line2 .= "    Input Output";
 		$line3 .= "----------------";
-		print("    $line1\n");
-		print("Time $line2\n");
-		print("-----$line3 \n");
+		push(@output, "    $line1\n");
+		push(@output, "Time $line2\n");
+		push(@output, "-----$line3 \n");
 		my $line;
 		my @row;
 		my $time;
@@ -648,16 +667,16 @@ sub squid_cgi {
 			}
 			$line1 .= " %6d %6d ";
 			$time = $time - (1 / $tf->{ts});
-			printf(" %2d$tf->{tc}  $line1\n", $time, @row);
+			push(@output, sprintf(" %2d$tf->{tc}  $line1\n", $time, @row));
 		}
-		print("    </pre>\n");
+		push(@output, "    </pre>\n");
 		if($title) {
-			print("    </td>\n");
-			print("    </tr>\n");
-			main::graph_footer();
+			push(@output, "    </td>\n");
+			push(@output, "    </tr>\n");
+			push(@output, main::graph_footer());
 		}
-		print("  <br>\n");
-		return;
+		push(@output, "  <br>\n");
+		return @output;
 	}
 
 
@@ -710,12 +729,12 @@ sub squid_cgi {
 			"$IMG_DIR" . "$IMG9z");
 	}
 	if($title) {
-		main::graph_header($title, 2);
+		push(@output, main::graph_header($title, 2));
 	}
 	@riglim = @{setup_riglim($rigid[0], $limit[0])};
 	if($title) {
-		print("    <tr>\n");
-		print("    <td valign='top' bgcolor='$colors->{title_bg_color}'>\n");
+		push(@output, "    <tr>\n");
+		push(@output, "    <td valign='top' bgcolor='$colors->{title_bg_color}'>\n");
 	}
 	my @sg0 = split(',', $squid->{graph_0});
 	for($n = 0, $i = 1; $n < 9; $n++, $i++) {
@@ -757,6 +776,7 @@ sub squid_cgi {
 		"--vertical-label=Values/s",
 		"--width=$width",
 		"--height=$height",
+		@extra,
 		@riglim,
 		$zoom,
 		@{$cgi->{version12}},
@@ -765,7 +785,7 @@ sub squid_cgi {
 		@CDEF,
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $IMG_DIR" . "$IMG1: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG1: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
 		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG1z",
@@ -775,6 +795,7 @@ sub squid_cgi {
 			"--vertical-label=Values/s",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -783,12 +804,12 @@ sub squid_cgi {
 			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG1z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG1z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /squid1/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "' border='0'></a>\n");
 			} else {
 				if($version eq "new") {
 					$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -797,10 +818,10 @@ sub squid_cgi {
 					$picz_width = $width + 115;
 					$picz_height = $height + 100;
 				}
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "'>\n");
 		}
 	}
 
@@ -851,6 +872,7 @@ sub squid_cgi {
 		"--vertical-label=Values/s",
 		"--width=$width",
 		"--height=$height",
+		@extra,
 		@riglim,
 		$zoom,
 		@{$cgi->{version12}},
@@ -859,7 +881,7 @@ sub squid_cgi {
 		@CDEF,
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $IMG_DIR" . "$IMG2: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG2: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
 		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG2z",
@@ -869,6 +891,7 @@ sub squid_cgi {
 			"--vertical-label=Values/s",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -877,12 +900,12 @@ sub squid_cgi {
 			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG2z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG2z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /squid2/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "' border='0'></a>\n");
 			} else {
 				if($version eq "new") {
 					$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -891,10 +914,10 @@ sub squid_cgi {
 					$picz_width = $width + 115;
 					$picz_height = $height + 100;
 				}
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "'>\n");
 		}
 	}
 
@@ -970,6 +993,7 @@ sub squid_cgi {
 		"--vertical-label=Values/s",
 		"--width=$width",
 		"--height=$height",
+		@extra,
 		@riglim,
 		$zoom,
 		@{$cgi->{version12}},
@@ -987,7 +1011,7 @@ sub squid_cgi {
 		@CDEF,
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $IMG_DIR" . "$IMG3: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG3: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
 		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG3z",
@@ -997,6 +1021,7 @@ sub squid_cgi {
 			"--vertical-label=Values/s",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -1014,12 +1039,12 @@ sub squid_cgi {
 			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG3z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG3z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /squid3/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "' border='0'></a>\n");
 			} else {
 				if($version eq "new") {
 					$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -1028,16 +1053,16 @@ sub squid_cgi {
 					$picz_width = $width + 115;
 					$picz_height = $height + 100;
 				}
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "'>\n");
 		}
 	}
 
 	if($title) {
-		print("    </td>\n");
-		print("    <td valign='top' bgcolor='" . $colors->{title_bg_color} . "'>\n");
+		push(@output, "    </td>\n");
+		push(@output, "    <td valign='top' bgcolor='" . $colors->{title_bg_color} . "'>\n");
 	}
 	@riglim = @{setup_riglim($rigid[3], $limit[3])};
 	undef(@tmp);
@@ -1073,6 +1098,7 @@ sub squid_cgi {
 		"--vertical-label=Megabytes",
 		"--width=$width",
 		"--height=$height",
+		@extra,
 		@riglim,
 		$zoom,
 		@{$cgi->{version12}},
@@ -1087,7 +1113,7 @@ sub squid_cgi {
 		@CDEF,
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $IMG_DIR" . "$IMG4: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG4: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
 		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG4z",
@@ -1097,6 +1123,7 @@ sub squid_cgi {
 			"--vertical-label=Megabytes",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -1111,12 +1138,12 @@ sub squid_cgi {
 			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG4z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG4z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /squid4/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4 . "' border='0'></a>\n");
 			} else {
 				if($version eq "new") {
 					$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -1125,10 +1152,10 @@ sub squid_cgi {
 					$picz_width = $width + 115;
 					$picz_height = $height + 100;
 				}
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4 . "'>\n");
 		}
 	}
 
@@ -1166,6 +1193,7 @@ sub squid_cgi {
 		"--vertical-label=Megabytes",
 		"--width=$width",
 		"--height=$height",
+		@extra,
 		@riglim,
 		$zoom,
 		@{$cgi->{version12}},
@@ -1180,7 +1208,7 @@ sub squid_cgi {
 		@CDEF,
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $IMG_DIR" . "$IMG5: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG5: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
 		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG5z",
@@ -1190,6 +1218,7 @@ sub squid_cgi {
 			"--vertical-label=Megabytes",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -1204,12 +1233,12 @@ sub squid_cgi {
 			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG5z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG5z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /squid5/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5 . "' border='0'></a>\n");
 			} else {
 				if($version eq "new") {
 					$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -1218,10 +1247,10 @@ sub squid_cgi {
 					$picz_width = $width + 115;
 					$picz_height = $height + 100;
 				}
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5 . "'>\n");
 		}
 	}
 
@@ -1265,6 +1294,7 @@ sub squid_cgi {
 		"--vertical-label=Values/s",
 		"--width=$width",
 		"--height=$height",
+		@extra,
 		@riglim,
 		$zoom,
 		@{$cgi->{version12}},
@@ -1277,7 +1307,7 @@ sub squid_cgi {
 		@CDEF,
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $IMG_DIR" . "$IMG6: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG6: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
 		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG6z",
@@ -1287,6 +1317,7 @@ sub squid_cgi {
 			"--vertical-label=Values/s",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -1299,12 +1330,12 @@ sub squid_cgi {
 			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG6z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG6z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /squid6/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG6z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG6 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG6z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG6 . "' border='0'></a>\n");
 			} else {
 				if($version eq "new") {
 					$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -1313,10 +1344,10 @@ sub squid_cgi {
 					$picz_width = $width + 115;
 					$picz_height = $height + 100;
 				}
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG6z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG6 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG6z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG6 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG6 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG6 . "'>\n");
 		}
 	}
 
@@ -1365,6 +1396,7 @@ sub squid_cgi {
 		"--vertical-label=Reads/s",
 		"--width=$width",
 		"--height=$height",
+		@extra,
 		@riglim,
 		$zoom,
 		@{$cgi->{version12}},
@@ -1378,7 +1410,7 @@ sub squid_cgi {
 		@CDEF,
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $IMG_DIR" . "$IMG7: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG7: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
 		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG7z",
@@ -1388,6 +1420,7 @@ sub squid_cgi {
 			"--vertical-label=Reads/s",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -1401,12 +1434,12 @@ sub squid_cgi {
 			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG7z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG7z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /squid7/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG7z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG7 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG7z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG7 . "' border='0'></a>\n");
 			} else {
 				if($version eq "new") {
 					$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -1415,10 +1448,10 @@ sub squid_cgi {
 					$picz_width = $width + 115;
 					$picz_height = $height + 100;
 				}
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG7z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG7 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG7z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG7 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG7 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG7 . "'>\n");
 		}
 	}
 
@@ -1466,6 +1499,7 @@ sub squid_cgi {
 		"--vertical-label=$vlabel",
 		"--width=$width",
 		"--height=$height",
+		@extra,
 		@riglim,
 		$zoom,
 		@{$cgi->{version12}},
@@ -1477,7 +1511,7 @@ sub squid_cgi {
 		@CDEF,
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $IMG_DIR" . "$IMG8: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG8: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
 		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG8z",
@@ -1487,6 +1521,7 @@ sub squid_cgi {
 			"--vertical-label=$vlabel",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -1498,12 +1533,12 @@ sub squid_cgi {
 			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG8z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG8z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /squid8/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG8z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG8 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG8z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG8 . "' border='0'></a>\n");
 			} else {
 				if($version eq "new") {
 					$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -1512,10 +1547,10 @@ sub squid_cgi {
 					$picz_width = $width + 115;
 					$picz_height = $height + 100;
 				}
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG8z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG8 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG8z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG8 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG8 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG8 . "'>\n");
 		}
 	}
 
@@ -1563,6 +1598,7 @@ sub squid_cgi {
 		"--vertical-label=$vlabel",
 		"--width=$width",
 		"--height=$height",
+		@extra,
 		@riglim,
 		$zoom,
 		@{$cgi->{version12}},
@@ -1574,7 +1610,7 @@ sub squid_cgi {
 		@CDEF,
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $IMG_DIR" . "$IMG9: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG9: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
 		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG9z",
@@ -1584,6 +1620,7 @@ sub squid_cgi {
 			"--vertical-label=$vlabel",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -1595,12 +1632,12 @@ sub squid_cgi {
 			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG9z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG9z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /squid9/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG9z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG9 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG9z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG9 . "' border='0'></a>\n");
 			} else {
 				if($version eq "new") {
 					$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -1609,20 +1646,20 @@ sub squid_cgi {
 					$picz_width = $width + 115;
 					$picz_height = $height + 100;
 				}
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG9z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG9 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG9z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG9 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG9 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG9 . "'>\n");
 		}
 	}
 
 	if($title) {
-		print("    </td>\n");
-		print("    </tr>\n");
-		main::graph_footer();
+		push(@output, "    </td>\n");
+		push(@output, "    </tr>\n");
+		push(@output, main::graph_footer());
 	}
-	print("  <br>\n");
-	return;
+	push(@output, "  <br>\n");
+	return @output;
 }
 
 1;

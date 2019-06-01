@@ -1,7 +1,7 @@
 #
 # Monitorix - A lightweight system monitoring tool.
 #
-# Copyright (C) 2005-2016 by Jordi Sanfeliu <jordi@fibranet.cat>
+# Copyright (C) 2005-2019 by Jordi Sanfeliu <jordi@fibranet.cat>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -636,6 +636,7 @@ sub pagespeed_update {
 
 sub pagespeed_cgi {
 	my ($package, $config, $cgi) = @_;
+	my @output;
 
 	my $pagespeed = $config->{pagespeed};
 	my @rigid = split(',', ($pagespeed->{rigid} || ""));
@@ -658,6 +659,7 @@ sub pagespeed_cgi {
 	my $u = "";
 	my $width;
 	my $height;
+	my @extra;
 	my @riglim;
 	my @IMG;
 	my @IMGz;
@@ -677,6 +679,9 @@ sub pagespeed_cgi {
 	my $IMG_DIR = $config->{base_dir} . "/" . $config->{imgs_dir};
 	my $imgfmt_uc = uc($config->{image_format});
 	my $imgfmt_lc = lc($config->{image_format});
+	foreach my $i (split(',', $config->{rrdtool_extra_options} || "")) {
+		push(@extra, trim($i)) if trim($i);
+	}
 
 	$title = !$silent ? $title : "";
 
@@ -685,23 +690,23 @@ sub pagespeed_cgi {
 	#
 	if(lc($config->{iface_mode}) eq "text") {
 		if($title) {
-			main::graph_header($title, 2);
-			print("    <tr>\n");
-			print("    <td bgcolor='$colors->{title_bg_color}'>\n");
+			push(@output, main::graph_header($title, 2));
+			push(@output, "    <tr>\n");
+			push(@output, "    <td bgcolor='$colors->{title_bg_color}'>\n");
 		}
 		my (undef, undef, undef, $data) = RRDs::fetch("$rrd",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
 			"AVERAGE",
 			"-r $tf->{res}");
 		$err = RRDs::error;
-		print("ERROR: while fetching $rrd: $err\n") if $err;
+		push(@output, "ERROR: while fetching $rrd: $err\n") if $err;
 		my $line0;
 		my $line1;
 		my $line2;
 		my $line3;
 		my $n2;
-		print("    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
-		print("    ");
+		push(@output, "    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
+		push(@output, "    ");
 		$line0 = "                                                          Cache Overview           File cache             LRU cache       Memcached async    Memcached blocking Pcache cohorts beacon    Pcache cohorts dom Rewrite cached             SHM cache         CSS filter total      Image rewrite total         Javascript total       Compressed cache";
 		for($n = 0; $n < scalar(my @pl = split(',', $pagespeed->{list})); $n++) {
 			my $l = trim($pl[$n]);
@@ -710,12 +715,12 @@ sub pagespeed_cgi {
 			$line2 .= "    Hits Misses  B.Hits Misses Fallba Expira Insert Delete Extens Notcac   Hits Insert Misses    Hits Insert Misses    Hits Insert Misses    Hits Insert Misses    Hits Insert Misses    Hits Insert Misses    Hits Misses    Hits Insert Misses    Orig_bytes Save_Bytes    Orig_bytes Save_bytes    Orig_bytes Save_bytes    Orig_size Comp_size";
 
 			my $i = length($line0);
-			printf(sprintf("%${i}s", sprintf("Pagespeed: %s", $l)));
+			push(@output, sprintf(sprintf("%${i}s", sprintf("Pagespeed: %s", $l))));
 		}
-		print("\n");
-		print("    $line1\n");
-		print("Time$line2 \n");
-		print("----$line3 \n");
+		push(@output, "\n");
+		push(@output, "    $line1\n");
+		push(@output, "Time$line2 \n");
+		push(@output, "----$line3 \n");
 		my $line;
 		my @row;
 		my $time;
@@ -725,23 +730,23 @@ sub pagespeed_cgi {
 			$line = @$data[$n];
 			$time = $time - (1 / $tf->{ts});
 			$from = 1;
-			printf(" %2d$tf->{tc} ", $time);
+			push(@output, sprintf(" %2d$tf->{tc} ", $time));
 			for($n2 = 0; $n2 < scalar(my @pl = split(',', $pagespeed->{list})); $n2++) {
 				$from += $n2 * 52;
 				$to = $from + 52;
 				@row = @$line[$from..$to];
-				printf(" %6d %6d  %6d %6d %6d %6d %6d %6d %6d %6d %6d %6d %6d  %6d %6d %6d  %6d %6d %6d  %6d %6d %6d  %6d %6d %6d  %6d %6d %6d  %6d %6d  %6d %6d %6d    %10d %10d    %10d %10d    %10d %10d    %9d %9d", @row);
+				push(@output, sprintf(" %6d %6d  %6d %6d %6d %6d %6d %6d %6d %6d %6d %6d %6d  %6d %6d %6d  %6d %6d %6d  %6d %6d %6d  %6d %6d %6d  %6d %6d %6d  %6d %6d  %6d %6d %6d    %10d %10d    %10d %10d    %10d %10d    %9d %9d", @row));
 			}
-			print("\n");
+			push(@output, "\n");
 		}
-		print("    </pre>\n");
+		push(@output, "    </pre>\n");
 		if($title) {
-			print("    </td>\n");
-			print("    </tr>\n");
-			main::graph_footer();
+			push(@output, "    </td>\n");
+			push(@output, "    </tr>\n");
+			push(@output, main::graph_footer());
 		}
-		print("  <br>\n");
-		return;
+		push(@output, "  <br>\n");
+		return @output;
 	}
 
 
@@ -773,15 +778,15 @@ sub pagespeed_cgi {
 	foreach (my @pl = split(',', $pagespeed->{list})) {
 		my $l = trim($_);
 		if($e) {
-			print("   <br>\n");
+			push(@output, "   <br>\n");
 		}
 		if($title) {
-			main::graph_header($title, 2);
+			push(@output, main::graph_header($title, 2));
 		}
 		@riglim = @{setup_riglim($rigid[0], $limit[0])};
 		if($title) {
-			print("    <tr>\n");
-			print("    <td valign='top' bgcolor='" . $colors->{title_bg_color} . "'>\n");
+			push(@output, "    <tr>\n");
+			push(@output, "    <td valign='top' bgcolor='" . $colors->{title_bg_color} . "'>\n");
 		}
 		undef(@tmp);
 		undef(@tmpz);
@@ -865,6 +870,7 @@ sub pagespeed_cgi {
 			"--vertical-label=Values/s",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -883,7 +889,7 @@ sub pagespeed_cgi {
 			@CDEF,
 			@tmp);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG[$e * 8]: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG[$e * 8]: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
 			$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$e * 8]",
@@ -893,6 +899,7 @@ sub pagespeed_cgi {
 				"--vertical-label=Values/s",
 				"--width=$width",
 				"--height=$height",
+				@extra,
 				@riglim,
 				$zoom,
 				@{$cgi->{version12}},
@@ -911,13 +918,13 @@ sub pagespeed_cgi {
 				@CDEF,
 				@tmpz);
 			$err = RRDs::error;
-			print("ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 8]: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 8]: $err\n") if $err;
 		}
 		$e2 = $e + 1;
 		if($title || ($silent =~ /imagetag/ && $graph =~ /pagespeed$e2/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
-					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 8] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 8] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8] . "' border='0'></a>\n");
 				} else {
 					if($version eq "new") {
 						$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -926,10 +933,10 @@ sub pagespeed_cgi {
 						$picz_width = $width + 115;
 						$picz_height = $height + 100;
 					}
-					print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 8] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 8] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8] . "' border='0'></a>\n");
 				}
 			} else {
-				print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8] . "'>\n");
+				push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8] . "'>\n");
 			}
 		}
 
@@ -998,6 +1005,7 @@ sub pagespeed_cgi {
 			"--vertical-label=Values/s",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -1013,7 +1021,7 @@ sub pagespeed_cgi {
 			@CDEF,
 			@tmp);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG[$e * 8 + 1]: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG[$e * 8 + 1]: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
 			$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$e * 8 + 1]",
@@ -1023,6 +1031,7 @@ sub pagespeed_cgi {
 				"--vertical-label=Values/s",
 				"--width=$width",
 				"--height=$height",
+				@extra,
 				@riglim,
 				$zoom,
 				@{$cgi->{version12}},
@@ -1038,13 +1047,13 @@ sub pagespeed_cgi {
 				@CDEF,
 				@tmpz);
 			$err = RRDs::error;
-			print("ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 8 + 1]: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 8 + 1]: $err\n") if $err;
 		}
 		$e2 = $e + 2;
 		if($title || ($silent =~ /imagetag/ && $graph =~ /pagespeed$e2/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
-					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 8 + 1] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 1] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 8 + 1] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 1] . "' border='0'></a>\n");
 				} else {
 					if($version eq "new") {
 						$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -1053,10 +1062,10 @@ sub pagespeed_cgi {
 						$picz_width = $width + 115;
 						$picz_height = $height + 100;
 					}
-					print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 8 + 1] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 1] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 8 + 1] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 1] . "' border='0'></a>\n");
 				}
 			} else {
-				print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 1] . "'>\n");
+				push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 1] . "'>\n");
 			}
 		}
 
@@ -1106,6 +1115,7 @@ sub pagespeed_cgi {
 			"--vertical-label=Percent (%)",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -1122,7 +1132,7 @@ sub pagespeed_cgi {
 			@CDEF,
 			@tmp);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG[$e * 8 + 2]: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG[$e * 8 + 2]: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
 			$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$e * 8 + 2]",
@@ -1132,6 +1142,7 @@ sub pagespeed_cgi {
 				"--vertical-label=Percent (%)",
 				"--width=$width",
 				"--height=$height",
+				@extra,
 				@riglim,
 				$zoom,
 				@{$cgi->{version12}},
@@ -1148,13 +1159,13 @@ sub pagespeed_cgi {
 				@CDEF,
 				@tmpz);
 			$err = RRDs::error;
-			print("ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 8 + 2]: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 8 + 2]: $err\n") if $err;
 		}
 		$e2 = $e + 3;
 		if($title || ($silent =~ /imagetag/ && $graph =~ /pagespeed$e2/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
-					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 8 + 2] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 2] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 8 + 2] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 2] . "' border='0'></a>\n");
 				} else {
 					if($version eq "new") {
 						$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -1163,15 +1174,15 @@ sub pagespeed_cgi {
 						$picz_width = $width + 115;
 						$picz_height = $height + 100;
 					}
-					print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 8 + 2] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 2] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 8 + 2] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 2] . "' border='0'></a>\n");
 				}
 			} else {
-				print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 2] . "'>\n");
+				push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 2] . "'>\n");
 			}
 		}
 		if($title) {
-			print("    </td>\n");
-			print("    <td valign='top' bgcolor='" . $colors->{title_bg_color} . "'>\n");
+			push(@output, "    </td>\n");
+			push(@output, "    <td valign='top' bgcolor='" . $colors->{title_bg_color} . "'>\n");
 		}
 
 		@riglim = @{setup_riglim($rigid[3], $limit[3])};
@@ -1209,6 +1220,7 @@ sub pagespeed_cgi {
 			"--vertical-label=Values/s",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -1224,7 +1236,7 @@ sub pagespeed_cgi {
 			@CDEF,
 			@tmp);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG[$e * 8 + 3]: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG[$e * 8 + 3]: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
 			$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$e * 8 + 3]",
@@ -1234,6 +1246,7 @@ sub pagespeed_cgi {
 				"--vertical-label=Values/s",
 				"--width=$width",
 				"--height=$height",
+				@extra,
 				@riglim,
 				$zoom,
 				@{$cgi->{version12}},
@@ -1249,13 +1262,13 @@ sub pagespeed_cgi {
 				@CDEF,
 				@tmpz);
 			$err = RRDs::error;
-			print("ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 8 + 3]: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 8 + 3]: $err\n") if $err;
 		}
 		$e2 = $e + 4;
 		if($title || ($silent =~ /imagetag/ && $graph =~ /pagespeed$e2/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
-					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 8 + 3] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 3] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 8 + 3] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 3] . "' border='0'></a>\n");
 				} else {
 					if($version eq "new") {
 						$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -1264,10 +1277,10 @@ sub pagespeed_cgi {
 						$picz_width = $width + 115;
 						$picz_height = $height + 100;
 					}
-					print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 8 + 3] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 3] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 8 + 3] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 3] . "' border='0'></a>\n");
 				}
 			} else {
-				print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 3] . "'>\n");
+				push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 3] . "'>\n");
 			}
 		}
 
@@ -1306,6 +1319,7 @@ sub pagespeed_cgi {
 			"--vertical-label=Values/s",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -1321,7 +1335,7 @@ sub pagespeed_cgi {
 			@CDEF,
 			@tmp);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG[$e * 8 + 4]: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG[$e * 8 + 4]: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
 			$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$e * 8 + 4]",
@@ -1331,6 +1345,7 @@ sub pagespeed_cgi {
 				"--vertical-label=Values/s",
 				"--width=$width",
 				"--height=$height",
+				@extra,
 				@riglim,
 				$zoom,
 				@{$cgi->{version12}},
@@ -1346,13 +1361,13 @@ sub pagespeed_cgi {
 				@CDEF,
 				@tmpz);
 			$err = RRDs::error;
-			print("ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 8 + 4]: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 8 + 4]: $err\n") if $err;
 		}
 		$e2 = $e + 5;
 		if($title || ($silent =~ /imagetag/ && $graph =~ /pagespeed$e2/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
-					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 8 + 4] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 4] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 8 + 4] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 4] . "' border='0'></a>\n");
 				} else {
 					if($version eq "new") {
 						$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -1361,10 +1376,10 @@ sub pagespeed_cgi {
 						$picz_width = $width + 115;
 						$picz_height = $height + 100;
 					}
-					print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 8 + 4] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 4] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 8 + 4] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 4] . "' border='0'></a>\n");
 				}
 			} else {
-				print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 4] . "'>\n");
+				push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 4] . "'>\n");
 			}
 		}
 
@@ -1400,6 +1415,7 @@ sub pagespeed_cgi {
 			"--vertical-label=Values/s",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -1414,7 +1430,7 @@ sub pagespeed_cgi {
 			@CDEF,
 			@tmp);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG[$e * 8 + 5]: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG[$e * 8 + 5]: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
 			$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$e * 8 + 5]",
@@ -1424,6 +1440,7 @@ sub pagespeed_cgi {
 				"--vertical-label=Values/s",
 				"--width=$width",
 				"--height=$height",
+				@extra,
 				@riglim,
 				$zoom,
 				@{$cgi->{version12}},
@@ -1438,13 +1455,13 @@ sub pagespeed_cgi {
 				@CDEF,
 				@tmpz);
 			$err = RRDs::error;
-			print("ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 8 + 5]: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 8 + 5]: $err\n") if $err;
 		}
 		$e2 = $e + 6;
 		if($title || ($silent =~ /imagetag/ && $graph =~ /pagespeed$e2/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
-					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 8 + 5] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 5] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 8 + 5] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 5] . "' border='0'></a>\n");
 				} else {
 					if($version eq "new") {
 						$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -1453,10 +1470,10 @@ sub pagespeed_cgi {
 						$picz_width = $width + 115;
 						$picz_height = $height + 100;
 					}
-					print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 8 + 5] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 5] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 8 + 5] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 5] . "' border='0'></a>\n");
 				}
 			} else {
-				print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 5] . "'>\n");
+				push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 5] . "'>\n");
 			}
 		}
 
@@ -1495,6 +1512,7 @@ sub pagespeed_cgi {
 			"--vertical-label=Values/s",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -1510,7 +1528,7 @@ sub pagespeed_cgi {
 			@CDEF,
 			@tmp);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG[$e * 8 + 6]: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG[$e * 8 + 6]: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
 			$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$e * 8 + 6]",
@@ -1520,6 +1538,7 @@ sub pagespeed_cgi {
 				"--vertical-label=Value/s",
 				"--width=$width",
 				"--height=$height",
+				@extra,
 				@riglim,
 				$zoom,
 				@{$cgi->{version12}},
@@ -1535,13 +1554,13 @@ sub pagespeed_cgi {
 				@CDEF,
 				@tmpz);
 			$err = RRDs::error;
-			print("ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 8 + 6]: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 8 + 6]: $err\n") if $err;
 		}
 		$e2 = $e + 7;
 		if($title || ($silent =~ /imagetag/ && $graph =~ /pagespeed$e2/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
-					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 8 + 6] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 6] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 8 + 6] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 6] . "' border='0'></a>\n");
 				} else {
 					if($version eq "new") {
 						$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -1550,10 +1569,10 @@ sub pagespeed_cgi {
 						$picz_width = $width + 115;
 						$picz_height = $height + 100;
 					}
-					print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 8 + 6] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 6] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 8 + 6] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 6] . "' border='0'></a>\n");
 				}
 			} else {
-				print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 6] . "'>\n");
+				push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 6] . "'>\n");
 			}
 		}
 
@@ -1577,6 +1596,7 @@ sub pagespeed_cgi {
 			"--vertical-label=Microseconds/s",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -1587,7 +1607,7 @@ sub pagespeed_cgi {
 			@CDEF,
 			@tmp);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG[$e * 8 + 7]: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG[$e * 8 + 7]: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
 			$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$e * 8 + 7]",
@@ -1597,6 +1617,7 @@ sub pagespeed_cgi {
 				"--vertical-label=Microseconds/s",
 				"--width=$width",
 				"--height=$height",
+				@extra,
 				@riglim,
 				$zoom,
 				@{$cgi->{version12}},
@@ -1607,13 +1628,13 @@ sub pagespeed_cgi {
 				@CDEF,
 				@tmpz);
 			$err = RRDs::error;
-			print("ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 8 + 7]: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 8 + 7]: $err\n") if $err;
 		}
 		$e2 = $e + 8;
 		if($title || ($silent =~ /imagetag/ && $graph =~ /pagespeed$e2/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
-					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 8 + 7] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 7] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 8 + 7] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 7] . "' border='0'></a>\n");
 				} else {
 					if($version eq "new") {
 						$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -1622,31 +1643,31 @@ sub pagespeed_cgi {
 						$picz_width = $width + 115;
 						$picz_height = $height + 100;
 					}
-					print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 8 + 7] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 7] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 8 + 7] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 7] . "' border='0'></a>\n");
 				}
 			} else {
-				print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 7] . "'>\n");
+				push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 8 + 7] . "'>\n");
 			}
 		}
 
 		if($title) {
-			print("    </td>\n");
-			print("    </tr>\n");
+			push(@output, "    </td>\n");
+			push(@output, "    </tr>\n");
 
-			print("    <tr>\n");
-			print "      <td bgcolor='$colors->{title_bg_color}' colspan='2'>\n";
-			print "       <font face='Verdana, sans-serif' color='$colors->{title_fg_color}'>\n";
-			print "       <font size='-1'>\n";
-			print "        <b>&nbsp;&nbsp;<a href='" . $l . "' style='color: $colors->{title_fg_color}'>$l</a><b>\n";
-			print "       </font></font>\n";
-			print "      </td>\n";
-			print("    </tr>\n");
-			main::graph_footer();
+			push(@output, "    <tr>\n");
+			push(@output, "      <td bgcolor='$colors->{title_bg_color}' colspan='2'>\n");
+			push(@output, "       <font face='Verdana, sans-serif' color='$colors->{title_fg_color}'>\n");
+			push(@output, "       <font size='-1'>\n");
+			push(@output, "        <b>&nbsp;&nbsp;<a href='" . $l . "' style='color: $colors->{title_fg_color}'>$l</a><b>\n");
+			push(@output, "       </font></font>\n");
+			push(@output, "      </td>\n");
+			push(@output, "    </tr>\n");
+			push(@output, main::graph_footer());
 		}
 		$e++;
 	}
-	print("  <br>\n");
-	return;
+	push(@output, "  <br>\n");
+	return @output;
 }
 
 1;

@@ -1,7 +1,7 @@
 #
 # Monitorix - A lightweight system monitoring tool.
 #
-# Copyright (C) 2005-2017 by Jordi Sanfeliu <jordi@fibranet.cat>
+# Copyright (C) 2005-2019 by Jordi Sanfeliu <jordi@fibranet.cat>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -572,6 +572,7 @@ sub mongodb_update {
 
 sub mongodb_cgi {
 	my ($package, $config, $cgi) = @_;
+	my @output;
 
 	my $mongodb = $config->{mongodb};
 	my @rigid = split(',', ($mongodb->{rigid} || ""));
@@ -594,6 +595,7 @@ sub mongodb_cgi {
 	my $u = "";
 	my $width;
 	my $height;
+	my @extra;
 	my @riglim;
 	my @IMG;
 	my @IMGz;
@@ -615,6 +617,9 @@ sub mongodb_cgi {
 	my $IMG_DIR = $config->{base_dir} . "/" . $config->{imgs_dir};
 	my $imgfmt_uc = uc($config->{image_format});
 	my $imgfmt_lc = lc($config->{image_format});
+	foreach my $i (split(',', $config->{rrdtool_extra_options} || "")) {
+		push(@extra, trim($i)) if trim($i);
+	}
 
 	$title = !$silent ? $title : "";
 
@@ -628,16 +633,16 @@ sub mongodb_cgi {
 	#
 	if(lc($config->{iface_mode}) eq "text") {
 		if($title) {
-			main::graph_header($title, 2);
-			print("    <tr>\n");
-			print("    <td bgcolor='$colors->{title_bg_color}'>\n");
+			push(@output, main::graph_header($title, 2));
+			push(@output, "    <tr>\n");
+			push(@output, "    <td bgcolor='$colors->{title_bg_color}'>\n");
 		}
 		my (undef, undef, undef, $data) = RRDs::fetch("$rrd",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
 			"AVERAGE",
 			"-r $tf->{res}");
 		$err = RRDs::error;
-		print("ERROR: while fetching $rrd: $err\n") if $err;
+		push(@output, "ERROR: while fetching $rrd: $err\n") if $err;
 		my $line0;
 		my $line1;
 		my $line2;
@@ -647,8 +652,8 @@ sub mongodb_cgi {
 		my $host;
 		my $port;
 		my $m;
-		print("    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
-		print("    ");
+		push(@output, "    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
+		push(@output, "    ");
 		for($n = 0; $n < scalar(my @ml = split(',', $mongodb->{list})); $n++) {
 			$line0 = "                                                                                                                                                                                                                                                  ";
 			$line1 .= "  Asserts  BgFl_Avg BgFl_Last Conn_Curr Conn_TotC Dur_Comm Dur_IO_MB EI_Heap_Usg EI_PgFlt Gbl_CurrQu Gbl_ActCli  Net_Input Net_Output Net_Reqs OpCnt_Ins OpCnt_Que OpCnt_Upd OpCnt_Del OpCnt_Get OpCnt_Com MtDoc_del MtDoc_Ins MtDoc_Ret MtDoc_Upd";
@@ -668,10 +673,10 @@ sub mongodb_cgi {
 				$line3 .= sprintf("%${i}s", sprintf("DB: %s", $db));
 			}
 		}
-		printf(sprintf("%${m}s\n", sprintf("%s - (%s:%s)", $mongo, $host, $port)));
-		print("    $line3\n");
-		print("Time$line1\n");
-		print("----$line2 \n");
+		push(@output, sprintf(sprintf("%${m}s\n", sprintf("%s - (%s:%s)", $mongo, $host, $port))));
+		push(@output, "    $line3\n");
+		push(@output, "Time$line1\n");
+		push(@output, "----$line2 \n");
 		my $line;
 		my @row;
 		my $time;
@@ -685,7 +690,7 @@ sub mongodb_cgi {
 
 			$bf_avg /= 1000000;
 			$bf_lastms /= 1000000;
-			printf(" %2d$tf->{tc}  %7d %9.6f %9.6f %9d %9d %8d %9d  %10d %8d %10d %10d %10d %10d %8d %9d %9d %9d %9d %9d %9d %9d %9d %9d %9d X", $time, $asserts, $bf_avg, $bf_lastms, $conn_curr, $conn_totc, $dur_commi, $dur_io, $ei_heapus, $ei_pgfalt, $gbl_currq, $gbl_actcl, $net_in, $net_out, $net_req, $op_ins, $op_que, $op_upd, $op_del, $op_get, $op_com, $doc_del, $doc_ins, $doc_ret, $doc_upd);
+			push(@output, sprintf(" %2d$tf->{tc}  %7d %9.6f %9.6f %9d %9d %8d %9d  %10d %8d %10d %10d %10d %10d %8d %9d %9d %9d %9d %9d %9d %9d %9d %9d %9d X", $time, $asserts, $bf_avg, $bf_lastms, $conn_curr, $conn_totc, $dur_commi, $dur_io, $ei_heapus, $ei_pgfalt, $gbl_currq, $gbl_actcl, $net_in, $net_out, $net_req, $op_ins, $op_que, $op_upd, $op_del, $op_get, $op_com, $doc_del, $doc_ins, $doc_ret, $doc_upd));
 			for($n2 = 0; $n2 < scalar(my @ml = split(',', $mongodb->{list})); $n2++) {
 				$mongo = trim($ml[$n2]);
 				$from = (35 + 12) * $n2;
@@ -694,19 +699,19 @@ sub mongodb_cgi {
 					$from += ($n3 * 12);
 					$to = $from + 12;
 					my ($colls, $objcs, $dsize, $ssize, $nexte, $index, $fsize) = @$line[$from..$to];
-					printf(" %4d %8d  %9d %10d %6d %7d %11d", $colls, $objcs, $dsize, $ssize, $nexte, $index, $fsize);
+					push(@output, sprintf(" %4d %8d  %9d %10d %6d %7d %11d", $colls, $objcs, $dsize, $ssize, $nexte, $index, $fsize));
 				}
 			}
-			print("\n");
+			push(@output, "\n");
 		}
-		print("    </pre>\n");
+		push(@output, "    </pre>\n");
 		if($title) {
-			print("    </td>\n");
-			print("    </tr>\n");
-			main::graph_footer();
+			push(@output, "    </td>\n");
+			push(@output, "    </tr>\n");
+			push(@output, main::graph_footer());
 		}
-		print("  <br>\n");
-		return;
+		push(@output, "  <br>\n");
+		return @output;
 	}
 
 
@@ -760,14 +765,14 @@ sub mongodb_cgi {
 		my $mongo = trim($db);
 
 		if($e) {
-			print("  <br>\n");
+			push(@output, "  <br>\n");
 		}
 		if($title) {
-			main::graph_header($title, 2);
+			push(@output, main::graph_header($title, 2));
 		}
 		if($title) {
-			print("    <tr>\n");
-			print("    <td bgcolor='$colors->{title_bg_color}'>\n");
+			push(@output, "    <tr>\n");
+			push(@output, "    <td bgcolor='$colors->{title_bg_color}'>\n");
 		}
 		@riglim = @{setup_riglim($rigid[0], $limit[0])};
 		undef(@tmp);
@@ -827,6 +832,7 @@ sub mongodb_cgi {
 			"--vertical-label=Operations/s",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -842,7 +848,7 @@ sub mongodb_cgi {
 			@tmp,
 			"COMMENT: \\n");
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG[$e * 6]: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG[$e * 6]: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
 			$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$e * 6]",
@@ -852,6 +858,7 @@ sub mongodb_cgi {
 				"--vertical-label=Operations/s",
 				"--width=$width",
 				"--height=$height",
+				@extra,
 				@riglim,
 				$zoom,
 				@{$cgi->{version12}},
@@ -866,13 +873,13 @@ sub mongodb_cgi {
 				@CDEF,
 				@tmpz);
 			$err = RRDs::error;
-			print("ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 6]: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 6]: $err\n") if $err;
 		}
 		$e2 = $e + 1;
 		if($title || ($silent =~ /imagetag/ && $graph =~ /mongodb$e2/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
-					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 6] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 6] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6] . "' border='0'></a>\n");
 				} else {
 					if($version eq "new") {
 						$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -881,10 +888,10 @@ sub mongodb_cgi {
 						$picz_width = $width + 115;
 						$picz_height = $height + 100;
 					}
-					print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 6] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 6] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6] . "' border='0'></a>\n");
 				}
 			} else {
-				print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6] . "'>\n");
+				push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6] . "'>\n");
 			}
 		}
 
@@ -934,6 +941,7 @@ sub mongodb_cgi {
 			"--vertical-label=Values/s",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -947,7 +955,7 @@ sub mongodb_cgi {
 			@tmp,
 			"COMMENT: \\n");
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG[$e * 6 + 1]: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG[$e * 6 + 1]: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
 			$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$e * 6 + 1]",
@@ -957,6 +965,7 @@ sub mongodb_cgi {
 				"--vertical-label=Values/s",
 				"--width=$width",
 				"--height=$height",
+				@extra,
 				@riglim,
 				$zoom,
 				@{$cgi->{version12}},
@@ -969,13 +978,13 @@ sub mongodb_cgi {
 				@CDEF,
 				@tmpz);
 			$err = RRDs::error;
-			print("ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 6 + 1]: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 6 + 1]: $err\n") if $err;
 		}
 		$e2 = $e + 2;
 		if($title || ($silent =~ /imagetag/ && $graph =~ /mongodb$e2/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
-					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 6 + 1] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + 1] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 6 + 1] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + 1] . "' border='0'></a>\n");
 				} else {
 					if($version eq "new") {
 						$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -984,16 +993,16 @@ sub mongodb_cgi {
 						$picz_width = $width + 115;
 						$picz_height = $height + 100;
 					}
-					print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 6 + 1] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + 1] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 6 + 1] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + 1] . "' border='0'></a>\n");
 				}
 			} else {
-				print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + 1] . "'>\n");
+				push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + 1] . "'>\n");
 			}
 		}
 
 		if($title) {
-			print("    </td>\n");
-			print("    <td valign='top' bgcolor='" . $colors->{title_bg_color} . "'>\n");
+			push(@output, "    </td>\n");
+			push(@output, "    <td valign='top' bgcolor='" . $colors->{title_bg_color} . "'>\n");
 		}
 		@riglim = @{setup_riglim($rigid[2], $limit[2])};
 		undef(@tmp);
@@ -1026,6 +1035,7 @@ sub mongodb_cgi {
 			"--vertical-label=ms",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -1037,7 +1047,7 @@ sub mongodb_cgi {
 			@CDEF,
 			@tmp);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG[$e * 6 + 2]: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG[$e * 6 + 2]: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
 			$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$e * 6 + 2]",
@@ -1047,6 +1057,7 @@ sub mongodb_cgi {
 				"--vertical-label=ms",
 				"--width=$width",
 				"--height=$height",
+				@extra,
 				@riglim,
 				$zoom,
 				@{$cgi->{version12}},
@@ -1058,13 +1069,13 @@ sub mongodb_cgi {
 				@CDEF,
 				@tmpz);
 			$err = RRDs::error;
-			print("ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 6 + 2]: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 6 + 2]: $err\n") if $err;
 		}
 		$e2 = $e + 3;
 		if($title || ($silent =~ /imagetag/ && $graph =~ /mongodb$e2/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
-					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 6 + 2] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + 2] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 6 + 2] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + 2] . "' border='0'></a>\n");
 				} else {
 					if($version eq "new") {
 						$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -1073,10 +1084,10 @@ sub mongodb_cgi {
 						$picz_width = $width + 115;
 						$picz_height = $height + 100;
 					}
-					print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 6 + 2] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + 2] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 6 + 2] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + 2] . "' border='0'></a>\n");
 				}
 			} else {
-				print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + 2] . "'>\n");
+				push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + 2] . "'>\n");
 			}
 		}
 
@@ -1111,6 +1122,7 @@ sub mongodb_cgi {
 			"--vertical-label=Connections",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -1122,7 +1134,7 @@ sub mongodb_cgi {
 			@CDEF,
 			@tmp);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG[$e * 6 + 3]: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG[$e * 6 + 3]: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
 			$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$e * 6 + 3]",
@@ -1132,6 +1144,7 @@ sub mongodb_cgi {
 				"--vertical-label=Connections",
 				"--width=$width",
 				"--height=$height",
+				@extra,
 				@riglim,
 				$zoom,
 				@{$cgi->{version12}},
@@ -1143,13 +1156,13 @@ sub mongodb_cgi {
 				@CDEF,
 				@tmpz);
 			$err = RRDs::error;
-			print("ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 6 + 3]: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 6 + 3]: $err\n") if $err;
 		}
 		$e2 = $e + 4;
 		if($title || ($silent =~ /imagetag/ && $graph =~ /mongodb$e2/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
-					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 6 + 3] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + 3] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 6 + 3] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + 3] . "' border='0'></a>\n");
 				} else {
 					if($version eq "new") {
 						$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -1158,10 +1171,10 @@ sub mongodb_cgi {
 						$picz_width = $width + 115;
 						$picz_height = $height + 100;
 					}
-					print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 6 + 3] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + 3] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 6 + 3] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + 3] . "' border='0'></a>\n");
 				}
 			} else {
-				print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + 3] . "'>\n");
+				push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + 3] . "'>\n");
 			}
 		}
 
@@ -1196,6 +1209,7 @@ sub mongodb_cgi {
 			"--vertical-label=Values/s",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -1207,7 +1221,7 @@ sub mongodb_cgi {
 			@CDEF,
 			@tmp);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG[$e * 6 + 4]: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG[$e * 6 + 4]: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
 			$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$e * 6 + 4]",
@@ -1217,6 +1231,7 @@ sub mongodb_cgi {
 				"--vertical-label=Values/s",
 				"--width=$width",
 				"--height=$height",
+				@extra,
 				@riglim,
 				$zoom,
 				@{$cgi->{version12}},
@@ -1228,13 +1243,13 @@ sub mongodb_cgi {
 				@CDEF,
 				@tmpz);
 			$err = RRDs::error;
-			print("ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 6 + 4]: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 6 + 4]: $err\n") if $err;
 		}
 		$e2 = $e + 5;
 		if($title || ($silent =~ /imagetag/ && $graph =~ /mongodb$e2/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
-					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 6 + 4] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + 4] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 6 + 4] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + 4] . "' border='0'></a>\n");
 				} else {
 					if($version eq "new") {
 						$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -1243,10 +1258,10 @@ sub mongodb_cgi {
 						$picz_width = $width + 115;
 						$picz_height = $height + 100;
 					}
-					print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 6 + 4] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + 4] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 6 + 4] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + 4] . "' border='0'></a>\n");
 				}
 			} else {
-				print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + 4] . "'>\n");
+				push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + 4] . "'>\n");
 			}
 		}
 
@@ -1294,6 +1309,7 @@ sub mongodb_cgi {
 			"--vertical-label=$vlabel",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -1305,7 +1321,7 @@ sub mongodb_cgi {
 			@CDEF,
 			@tmp);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG[$e * 6 + 5]: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG[$e * 6 + 5]: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
 			$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$e * 6 + 5]",
@@ -1315,6 +1331,7 @@ sub mongodb_cgi {
 				"--vertical-label=$vlabel",
 				"--width=$width",
 				"--height=$height",
+				@extra,
 				@riglim,
 				$zoom,
 				@{$cgi->{version12}},
@@ -1326,13 +1343,13 @@ sub mongodb_cgi {
 				@CDEF,
 				@tmpz);
 			$err = RRDs::error;
-			print("ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 6 + 5]: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 6 + 5]: $err\n") if $err;
 		}
 		$e2 = $e + 6;
 		if($title || ($silent =~ /imagetag/ && $graph =~ /mongodb$e2/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
-					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 6 + 5] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + 5] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 6 + 5] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + 5] . "' border='0'></a>\n");
 				} else {
 					if($version eq "new") {
 						$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -1341,10 +1358,10 @@ sub mongodb_cgi {
 						$picz_width = $width + 115;
 						$picz_height = $height + 100;
 					}
-					print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 6 + 5] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + 5] . "' border='0'></a>\n");
+					push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 6 + 5] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + 5] . "' border='0'></a>\n");
 				}
 			} else {
-				print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + 5] . "'>\n");
+				push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + 5] . "'>\n");
 			}
 		}
 
@@ -1352,17 +1369,17 @@ sub mongodb_cgi {
 		# the following graphs will show the DBs monitored
 
 		if($title) {
-			print("    <tr>\n");
-			print "      <td bgcolor='$colors->{title_bg_color}' colspan='2'>\n";
-			print "       <font face='Verdana, sans-serif' color='$colors->{title_fg_color}'>\n";
-			print "       <font size='-1'>\n";
-			print "        <b style='{color: " . $colors->{title_fg_color} . "}'>&nbsp;&nbsp;$mongo</b>\n";
-			print "       </font></font>\n";
-			print "      </td>\n";
-			print("    </tr>\n");
+			push(@output, "    <tr>\n");
+			push(@output, "      <td bgcolor='$colors->{title_bg_color}' colspan='2'>\n");
+			push(@output, "       <font face='Verdana, sans-serif' color='$colors->{title_fg_color}'>\n");
+			push(@output, "       <font size='-1'>\n");
+			push(@output, "        <b style='{color: " . $colors->{title_fg_color} . "}'>&nbsp;&nbsp;$mongo</b>\n");
+			push(@output, "       </font></font>\n");
+			push(@output, "      </td>\n");
+			push(@output, "    </tr>\n");
 
-			print("  </table>\n");
-			print("  <table cellspacing='5' cellpadding='0' width='1' bgcolor='$colors->{graph_bg_color}' border='1'>\n");
+			push(@output, "  </table>\n");
+			push(@output, "  <table cellspacing='5' cellpadding='0' width='1' bgcolor='$colors->{graph_bg_color}' border='1'>\n");
 		}
 
 		my $e3 = 0;
@@ -1371,8 +1388,8 @@ sub mongodb_cgi {
 			$str = trim($dbl[$e3]);
 
 			if($title) {
-				print("    <tr>\n");
-				print("    <td bgcolor='" . $colors->{title_bg_color} . "'>\n");
+				push(@output, "    <tr>\n");
+				push(@output, "    <td bgcolor='" . $colors->{title_bg_color} . "'>\n");
 			}
 
 			@riglim = @{setup_riglim($rigid[$e * 6 + $e2], $limit[$e * 6 + $e2])};
@@ -1409,6 +1426,7 @@ sub mongodb_cgi {
 				"--vertical-label=Values",
 				"--width=$width",
 				"--height=$height",
+				@extra,
 				@riglim,
 				$zoom,
 				@{$cgi->{version12}},
@@ -1421,7 +1439,7 @@ sub mongodb_cgi {
 				@CDEF,
 				@tmp);
 			$err = RRDs::error;
-			print("ERROR: while graphing $IMG_DIR" . "$IMG[$e * 6 + $e2]: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG[$e * 6 + $e2]: $err\n") if $err;
 			if(lc($config->{enable_zoom}) eq "y") {
 				($width, $height) = split('x', $config->{graph_size}->{zoom});
 				$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$e * 6 + $e2]",
@@ -1431,6 +1449,7 @@ sub mongodb_cgi {
 					"--vertical-label=Values",
 					"--width=$width",
 					"--height=$height",
+					@extra,
 					@riglim,
 					$zoom,
 					@{$cgi->{version12}},
@@ -1443,12 +1462,12 @@ sub mongodb_cgi {
 					@CDEF,
 					@tmpz);
 				$err = RRDs::error;
-				print("ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 6 + $e2]: $err\n") if $err;
+				push(@output, "ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 6 + $e2]: $err\n") if $err;
 			}
 			if($title || ($silent =~ /imagetag/ && $graph =~ /mongodb/)) {
 				if(lc($config->{enable_zoom}) eq "y") {
 					if(lc($config->{disable_javascript_void}) eq "y") {
-						print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 6 + $e2] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + $e2] . "' border='0'></a>\n");
+						push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 6 + $e2] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + $e2] . "' border='0'></a>\n");
 					} else {
 						if($version eq "new") {
 							$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -1457,16 +1476,16 @@ sub mongodb_cgi {
 							$picz_width = $width + 115;
 							$picz_height = $height + 100;
 						}
-						print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 6 + $e2] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + $e2] . "' border='0'></a>\n");
+						push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 6 + $e2] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + $e2] . "' border='0'></a>\n");
 					}
 				} else {
-					print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + $e2] . "'>\n");
+					push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + $e2] . "'>\n");
 				}
 			}
 
 			if($title) {
-				print("    </td>\n");
-				print("    <td bgcolor='" . $colors->{title_bg_color} . "'>\n");
+				push(@output, "    </td>\n");
+				push(@output, "    <td bgcolor='" . $colors->{title_bg_color} . "'>\n");
 			}
 
 			$e2++;
@@ -1504,6 +1523,7 @@ sub mongodb_cgi {
 				"--vertical-label=bytes",
 				"--width=$width",
 				"--height=$height",
+				@extra,
 				@riglim,
 				$zoom,
 				@{$cgi->{version12}},
@@ -1516,7 +1536,7 @@ sub mongodb_cgi {
 				@CDEF,
 				@tmp);
 			$err = RRDs::error;
-			print("ERROR: while graphing $IMG_DIR" . "$IMG[$e * 6 + $e2]: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG[$e * 6 + $e2]: $err\n") if $err;
 			if(lc($config->{enable_zoom}) eq "y") {
 				($width, $height) = split('x', $config->{graph_size}->{zoom});
 				$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$e * 6 + $e2]",
@@ -1526,6 +1546,7 @@ sub mongodb_cgi {
 					"--vertical-label=bytes",
 					"--width=$width",
 					"--height=$height",
+					@extra,
 					@riglim,
 					$zoom,
 					@{$cgi->{version12}},
@@ -1538,12 +1559,12 @@ sub mongodb_cgi {
 					@CDEF,
 					@tmpz);
 				$err = RRDs::error;
-				print("ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 6 + $e2]: $err\n") if $err;
+				push(@output, "ERROR: while graphing $IMG_DIR" . "$IMGz[$e * 6 + $e2]: $err\n") if $err;
 			}
 			if($title || ($silent =~ /imagetag/ && $graph =~ /mongodb/)) {
 				if(lc($config->{enable_zoom}) eq "y") {
 					if(lc($config->{disable_javascript_void}) eq "y") {
-						print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 6 + $e2] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + $e2] . "' border='0'></a>\n");
+						push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 6 + $e2] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + $e2] . "' border='0'></a>\n");
 					} else {
 						if($version eq "new") {
 							$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -1552,15 +1573,15 @@ sub mongodb_cgi {
 							$picz_width = $width + 115;
 							$picz_height = $height + 100;
 						}
-						print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 6 + $e2] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + $e2] . "' border='0'></a>\n");
+						push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e * 6 + $e2] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + $e2] . "' border='0'></a>\n");
 					}
 				} else {
-					print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + $e2] . "'>\n");
+					push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e * 6 + $e2] . "'>\n");
 				}
 			}
 			if($title) {
-				print("    </td>\n");
-				print("    </tr>\n");
+				push(@output, "    </td>\n");
+				push(@output, "    </tr>\n");
 			}
 			$e2++;
 			$e3++;
@@ -1569,10 +1590,10 @@ sub mongodb_cgi {
 	}
 
 	if($title) {
-		main::graph_footer();
+		push(@output, main::graph_footer());
 	}
-	print("  <br>\n");
-	return;
+	push(@output, "  <br>\n");
+	return @output;
 }
 
 1;

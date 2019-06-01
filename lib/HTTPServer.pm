@@ -191,7 +191,7 @@ sub handle_request {
 	$denied = ip_validity($ENV{REMOTE_ADDR}, $hosts_deny) if !$allowed;
 	if(!$allowed && $denied) {
 		http_header("403", "html");
-		print "<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\">\r\n";
+		print("<!DOCTYPE html '-//W3C//DTD HTML 4.01 Final//EN'>\r\n");
 		print "<html><head>\r\n";
 		print "<title>403 Forbidden</title>\r\n";
 		print "</head><body>\r\n";
@@ -241,25 +241,26 @@ sub handle_request {
 		}
 	}
 
-	if(scalar(@data)) {
-		if($auth eq "y") {
-			if(http_header("401", $mimetype)) {
-				print "<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\">\r\n";
-				print "<html><head>\r\n";
-				print "<title>401 Authorization Required</title>\r\n";
-				print "</head><body>\r\n";
-				print "<h1>Authorization Required</h1>\r\n";
-				print "<p>This server could not verify that you\r\n";
-				print "are authorized to access the document\r\n";
-				print "requested.  Either you supplied the wrong\r\n";
-				print "credentials (e.g., bad password), or your\r\n";
-				print "browser doesn't understand how to supply\r\n";
-				print "the credentials required.</p>\r\n";
-				print "</body></html>\r\n";
-				logger($url, "AUTHERR");
-				exit(0);
-			}
+	if($auth eq "y") {
+		if(http_header("401", $mimetype)) {
+			print("<!DOCTYPE html '-//W3C//DTD HTML 4.01 Final//EN'>\r\n");
+			print "<html><head>\r\n";
+			print "<title>401 Authorization Required</title>\r\n";
+			print "</head><body>\r\n";
+			print "<h1>Authorization Required</h1>\r\n";
+			print "<p>This server could not verify that you\r\n";
+			print "are authorized to access the document\r\n";
+			print "requested.  Either you supplied the wrong\r\n";
+			print "credentials (e.g., bad password), or your\r\n";
+			print "browser doesn't understand how to supply\r\n";
+			print "the credentials required.</p>\r\n";
+			print "</body></html>\r\n";
+			logger($url, "AUTHERR");
+			exit(0);
 		}
+	}
+
+	if(scalar(@data)) {
 		http_header("200", $mimetype);
 		foreach(@data) {
 			print $_;
@@ -267,7 +268,7 @@ sub handle_request {
 		logger($url, "OK");
 	} else {
 		http_header("404", "html");
-		print "<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\">\r\n";
+		print("<!DOCTYPE html '-//W3C//DTD HTML 4.01 Final//EN'>\r\n");
 		print "<html><head>\r\n";
 		print "<title>404 Not Found</title>\r\n";
 		print "</head><body>\r\n";

@@ -1,7 +1,7 @@
 #
 # Monitorix - A lightweight system monitoring tool.
 #
-# Copyright (C) 2005-2016 by Jordi Sanfeliu <jordi@fibranet.cat>
+# Copyright (C) 2005-2019 by Jordi Sanfeliu <jordi@fibranet.cat>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -23,7 +23,7 @@ package Monitorix;
 use strict;
 use warnings;
 use Exporter 'import';
-use POSIX qw(setuid setgid setsid);
+use POSIX qw(setuid setgid setsid getgid getuid);
 use Socket;
 our @EXPORT = qw(logger trim min max celsius_to uptime2str setup_riglim httpd_setup get_nvidia_data get_ati_data flush_accounting_rules);
 
@@ -133,9 +133,18 @@ sub httpd_setup {
 	open(OUT, ">> " . $config->{httpd_builtin}->{log_file});
 	close(OUT);
 	chown($uid, $gid, $config->{httpd_builtin}->{log_file});
+	chmod(0600, $config->{httpd_builtin}->{log_file});
 
 	setgid($gid);
+	if(getgid() != $gid) {
+		logger("WARNING: $myself: unable to setgid($gid).");
+		exit(1);
+	}
 	setuid($uid);
+	if(getuid() != $uid) {
+		logger("WARNING: $myself: unable to setuid($uid).");
+		exit(1);
+	}
 	setsid();
 	$SIG{$_} = 'DEFAULT' for keys %SIG;		# reset all sighandlers
 	$0 = "monitorix-httpd listening on $port";	# change process' name
@@ -147,9 +156,8 @@ sub httpd_setup {
 			logger("$myself: '$config->{httpd_builtin}->{auth}->{htpasswd}' $!");
 		}
 	} else {
-		if(!grep {$_ eq $config->{httpd_builtin}->{host}}
-			("localhost", "127.0.0.1")) {
-			logger("WARNING: the built-in HTTP server has authentication disabled.");
+		if(!grep {$_ eq $config->{httpd_builtin}->{host}} ("localhost", "127.0.0.1")) {
+			logger("WARNING: the HTTP built-in server has authentication disabled.");
 		}
 	}
 

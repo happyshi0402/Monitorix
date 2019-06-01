@@ -3,7 +3,7 @@
 
 Summary: Monitorix is a system monitoring tool
 Name: monitorix
-Version: 3.9.0
+Version: 3.11.0
 Release: 1%{?dist}
 License: GPL
 Group: Applications/System
@@ -85,7 +85,7 @@ rm -rf %{buildroot}
 %{_localstatedir}/lib/monitorix/www/logo_bot.png
 %{_localstatedir}/lib/monitorix/www/monitorixico.png
 %{_localstatedir}/lib/monitorix/www/cgi/monitorix.cgi
-%attr(777,root,root) %{_localstatedir}/lib/monitorix/www/imgs
+%attr(755,root,root) %{_localstatedir}/lib/monitorix/www/imgs
 %attr(755,root,root) %{_localstatedir}/lib/monitorix/usage
 %{_localstatedir}/lib/monitorix/reports/*.html
 %doc %{_mandir}/man5/monitorix.conf.5.gz

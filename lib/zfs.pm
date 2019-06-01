@@ -1,7 +1,7 @@
 #
 # Monitorix - A lightweight system monitoring tool.
 #
-# Copyright (C) 2005-2016 by Jordi Sanfeliu <jordi@fibranet.cat>
+# Copyright (C) 2005-2019 by Jordi Sanfeliu <jordi@fibranet.cat>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -82,10 +82,10 @@ sub zfs_init {
 			push(@tmp, "DS:zfs" . $n . "_usnap:GAUGE:120:0:U");
 			push(@tmp, "DS:zfs" . $n . "_cap:GAUGE:120:0:100");
 			push(@tmp, "DS:zfs" . $n . "_fra:GAUGE:120:0:100");
-			push(@tmp, "DS:zfs" . $n . "_val1:GAUGE:120:0:U");
-			push(@tmp, "DS:zfs" . $n . "_val2:GAUGE:120:0:U");
-			push(@tmp, "DS:zfs" . $n . "_val3:GAUGE:120:0:U");
-			push(@tmp, "DS:zfs" . $n . "_val4:GAUGE:120:0:U");
+			push(@tmp, "DS:zfs" . $n . "_oper:GAUGE:120:0:U");
+			push(@tmp, "DS:zfs" . $n . "_opew:GAUGE:120:0:U");
+			push(@tmp, "DS:zfs" . $n . "_banr:GAUGE:120:0:U");
+			push(@tmp, "DS:zfs" . $n . "_banw:GAUGE:120:0:U");
 			push(@tmp, "DS:zfs" . $n . "_val5:GAUGE:120:0:U");
 		}
 		eval {
@@ -143,6 +143,17 @@ sub zfs_init {
 			}
 			return;
 		}
+	}
+
+	# Since 3.11.0 four new values were included (operations r/w and
+	# bandwidth r/w).
+	for($n = 0; $n < $zfs->{max_pools}; $n++) {
+		RRDs::tune($rrd,
+			"--data-source-rename=zfs" . $n . "_val1:zfs" . $n . "_oper",
+			"--data-source-rename=zfs" . $n . "_val2:zfs" . $n . "_opew",
+			"--data-source-rename=zfs" . $n . "_val3:zfs" . $n . "_banr",
+			"--data-source-rename=zfs" . $n . "_val4:zfs" . $n . "_banw",
+		);
 	}
 
 	$config->{zfs_hist} = ();
@@ -247,19 +258,20 @@ sub zfs_update {
 		my $usnap = 0;
 		my $cap = 0;
 		my $fra = 0;
-		my $val1 = 0;
-		my $val2 = 0;
-		my $val3 = 0;
-		my $val4 = 0;
+		my $oper = 0;
+		my $opew = 0;
+		my $banr = 0;
+		my $banw = 0;
 		my $val5 = 0;
 
 		my $pool = (split(',', $zfs->{list}))[$n] || "";
 		if($pool) {
 			my @zpool;
+			my @data;
 
-			$free = trim(`zfs get -rHp -o value available $pool`);
-			$udata = trim(`zfs get -rHp -o value used $pool`);
-			$usnap = trim(`zfs get -rHp -o value usedbysnapshots $pool`);
+			$free = trim(`zfs get -Hp -o value available $pool`);
+			$udata = trim(`zfs get -Hp -o value used $pool`);
+			$usnap = eval join('+',`zfs get -rHp -o value usedbysnapshots -tfilesystem $pool`);
 			@zpool = split(' ', `zpool list -H $pool` || "");
 
 			if(scalar(@zpool) == 10) {	# ZFS version 0.6.4+
@@ -271,9 +283,16 @@ sub zfs_update {
 			}
 			$cap =~ s/%//;
 			$fra =~ s/[%-]//g; $fra = $fra || 0;
+
+			open(IN, "zpool iostat -Hp $pool 5 2 |");
+			while(<IN>) {
+				push(@data, $_);
+			}
+			close(IN);
+			(undef, undef, undef, $oper, $opew, $banr, $banw) = split(' ', $data[1]);
 		}
 
-		$rrdata .= ":$free:$udata:$usnap:$cap:$fra:0:0:0:0:0";
+		$rrdata .= ":$free:$udata:$usnap:$cap:$fra:$oper:$opew:$banr:$banw:0";
 	}
 
 	RRDs::update($rrd, $rrdata);
@@ -284,6 +303,7 @@ sub zfs_update {
 
 sub zfs_cgi {
 	my ($package, $config, $cgi) = @_;
+	my @output;
 
 	my $zfs = $config->{zfs};
 	my @rigid = split(',', ($zfs->{rigid} || ""));
@@ -306,6 +326,7 @@ sub zfs_cgi {
 	my $u = "";
 	my $width;
 	my $height;
+	my @extra;
 	my @riglim;
 	my @IMG;
 	my @IMGz;
@@ -323,6 +344,9 @@ sub zfs_cgi {
 	my $IMG_DIR = $config->{base_dir} . "/" . $config->{imgs_dir};
 	my $imgfmt_uc = uc($config->{image_format});
 	my $imgfmt_lc = lc($config->{image_format});
+	foreach my $i (split(',', $config->{rrdtool_extra_options} || "")) {
+		push(@extra, trim($i)) if trim($i);
+	}
 
 	$title = !$silent ? $title : "";
 
@@ -331,21 +355,21 @@ sub zfs_cgi {
 	#
 	if(lc($config->{iface_mode}) eq "text") {
 		if($title) {
-			main::graph_header($title, 2);
-			print("    <tr>\n");
-			print("    <td bgcolor='$colors->{title_bg_color}'>\n");
+			push(@output, main::graph_header($title, 2));
+			push(@output, "    <tr>\n");
+			push(@output, "    <td bgcolor='$colors->{title_bg_color}'>\n");
 		}
 		my (undef, undef, undef, $data) = RRDs::fetch("$rrd",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
 			"AVERAGE",
 			"-r $tf->{res}");
 		$err = RRDs::error;
-		print("ERROR: while fetching $rrd: $err\n") if $err;
+		push(@output, "ERROR: while fetching $rrd: $err\n") if $err;
 		my $line0;
 		my $line1;
 		my $n2;
-		print("    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
-		print("    ");
+		push(@output, "    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
+		push(@output, "    ");
 		$line0 = "     ARC size       C-Max       C-Min  Targt size  Meta limit   Meta used    Meta max    ARC hits  ARC misses  ARC delete  L2ARC hits  L2ARC miss";
 		$line1 = "-------------------------------------------------------------------------------------------------------------------------------------------------";
 		for($n = 0; $n < scalar(my @zpl = split(',', $zfs->{list})); $n++) {
@@ -355,11 +379,11 @@ sub zfs_cgi {
 			$line1 .= "----------------------------------------------";
 			$i = length($line0) if(!$n);
 			$i = length($line0) - $i if($n);
-			printf(sprintf("%${i}s", sprintf("Pool: %s", $p)));
+			push(@output, sprintf(sprintf("%${i}s", sprintf("Pool: %s", $p))));
 		}
-		print("\n");
-		print("Time$line0\n");
-		print("----$line1 \n");
+		push(@output, "\n");
+		push(@output, "Time$line0\n");
+		push(@output, "----$line1 \n");
 		my $line;
 		my @row;
 		my $time;
@@ -369,24 +393,24 @@ sub zfs_cgi {
 			$line = @$data[$n];
 			$time = $time - (1 / $tf->{ts});
 			@row = @$line[0..12];
-			printf(" %2d$tf->{tc}   %10d  %10d  %10d  %10d  %10d  %10d  %10d  %10d  %10d  %10d  %10d  %10d", $time, @row);
+			push(@output, sprintf(" %2d$tf->{tc}   %10d  %10d  %10d  %10d  %10d  %10d  %10d  %10d  %10d  %10d  %10d  %10d", $time, @row));
 			for($n2 = 0; $n2 < scalar(my @zpl = split(',', $zfs->{list})); $n2++) {
 				$from = 22;
 				$from += $n2 * 10;
 				$to = $from + 5;
 				@row = @$line[$from..$to];
-				printf("  %10d  %10d  %10d %3d%% %3d%%", @row);
+				push(@output, sprintf("  %10d  %10d  %10d %3d%% %3d%%", @row));
 			}
-			print("\n");
+			push(@output, "\n");
 		}
-		print("    </pre>\n");
+		push(@output, "    </pre>\n");
 		if($title) {
-			print("    </td>\n");
-			print("    </tr>\n");
-			main::graph_footer();
+			push(@output, "    </td>\n");
+			push(@output, "    </tr>\n");
+			push(@output, main::graph_footer());
 		}
-		print("  <br>\n");
-		return;
+		push(@output, "  <br>\n");
+		return @output;
 	}
 
 
@@ -416,29 +440,26 @@ sub zfs_cgi {
 			"$IMG_DIR" . "$IMG3z");
 	}
 	for($n = 0; $n < scalar(my @pl = split(',', $zfs->{list})); $n++) {
-		$str = $u . $package . ($n + 4) . "1." . $tf->{when} . ".$imgfmt_lc";
-		push(@IMG, $str);
-		unlink("$IMG_DIR" . $str);
-		$str = $u . $package . ($n + 4) . "2." . $tf->{when} . ".$imgfmt_lc";
-		push(@IMG, $str);
-		unlink("$IMG_DIR" . $str);
-		if(lc($config->{enable_zoom}) eq "y") {
-			$str = $u . $package . ($n + 4) . "1z." . $tf->{when} . ".$imgfmt_lc";
-			push(@IMGz, $str);
+		my $n2;
+		for($n2 = 1; $n2 < 5; $n2++) {
+			$str = $u . $package . ($n + 4) . $n2 . "." . $tf->{when} . ".$imgfmt_lc";
+			push(@IMG, $str);
 			unlink("$IMG_DIR" . $str);
-			$str = $u . $package . ($n + 4) . "2z." . $tf->{when} . ".$imgfmt_lc";
-			push(@IMGz, $str);
-			unlink("$IMG_DIR" . $str);
+			if(lc($config->{enable_zoom}) eq "y") {
+				$str = $u . $package . ($n + 4) . $n2 . "z." . $tf->{when} . ".$imgfmt_lc";
+				push(@IMGz, $str);
+				unlink("$IMG_DIR" . $str);
+			}
 		}
 	}
 
 	if($title) {
-		main::graph_header($title, 2);
+		push(@output, main::graph_header($title, 2));
 	}
 	@riglim = @{setup_riglim($rigid[0], $limit[0])};
 	if($title) {
-		print("    <tr>\n");
-		print("    <td bgcolor='$colors->{title_bg_color}'>\n");
+		push(@output, "    <tr>\n");
+		push(@output, "    <td bgcolor='$colors->{title_bg_color}'>\n");
 	}
 	push(@tmp, "LINE2:arcsize#44EE44:ARC size");
 	push(@tmp, "GPRINT:arcsize:LAST:          Cur\\: %5.1lf%s");
@@ -500,6 +521,7 @@ sub zfs_cgi {
 		"--vertical-label=bytes",
 		"--width=$width",
 		"--height=$height",
+		@extra,
 		@riglim,
 		$zoom,
 		@{$cgi->{version12}},
@@ -516,7 +538,7 @@ sub zfs_cgi {
 		"COMMENT: \\n",
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $IMG_DIR" . "$IMG1: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG1: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
 		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG1z",
@@ -526,6 +548,7 @@ sub zfs_cgi {
 			"--vertical-label=bytes",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -541,12 +564,12 @@ sub zfs_cgi {
 			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG1z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG1z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /zfs1/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "' border='0'></a>\n");
 			} else {
 				if($version eq "new") {
 					$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -555,16 +578,16 @@ sub zfs_cgi {
 					$picz_width = $width + 115;
 					$picz_height = $height + 100;
 				}
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "'>\n");
 		}
 	}
 
 	if($title) {
-		print("    </td>\n");
-		print("    <td valign='top' bgcolor='" . $colors->{title_bg_color} . "'>\n");
+		push(@output, "    </td>\n");
+		push(@output, "    <td valign='top' bgcolor='" . $colors->{title_bg_color} . "'>\n");
 	}
 	@riglim = @{setup_riglim($rigid[1], $limit[1])};
 	undef(@tmp);
@@ -600,6 +623,7 @@ sub zfs_cgi {
 		"--vertical-label=Reads/s",
 		"--width=$width",
 		"--height=$height",
+		@extra,
 		@riglim,
 		$zoom,
 		@{$cgi->{version12}},
@@ -612,7 +636,7 @@ sub zfs_cgi {
 		@CDEF,
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $IMG_DIR" . "$IMG2: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG2: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
 		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG2z",
@@ -622,6 +646,7 @@ sub zfs_cgi {
 			"--vertical-label=Reads/s",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -634,12 +659,12 @@ sub zfs_cgi {
 			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG2z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG2z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /zfs2/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "' border='0'></a>\n");
 			} else {
 				if($version eq "new") {
 					$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -648,10 +673,10 @@ sub zfs_cgi {
 					$picz_width = $width + 115;
 					$picz_height = $height + 100;
 				}
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "'>\n");
 		}
 	}
 
@@ -686,6 +711,7 @@ sub zfs_cgi {
 		"--vertical-label=Reads/s",
 		"--width=$width",
 		"--height=$height",
+		@extra,
 		@riglim,
 		$zoom,
 		@{$cgi->{version12}},
@@ -697,7 +723,7 @@ sub zfs_cgi {
 		@CDEF,
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $IMG_DIR" . "$IMG3: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG3: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
 		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG3z",
@@ -707,6 +733,7 @@ sub zfs_cgi {
 			"--vertical-label=Reads/s",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -718,12 +745,12 @@ sub zfs_cgi {
 			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG3z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG3z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /zfs3/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "' border='0'></a>\n");
 			} else {
 				if($version eq "new") {
 					$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -732,16 +759,16 @@ sub zfs_cgi {
 					$picz_width = $width + 115;
 					$picz_height = $height + 100;
 				}
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "'>\n");
 		}
 	}
 
 	if($title) {
-		print("  </table>\n");
-		print("  <table cellspacing='5' cellpadding='0' width='1' bgcolor='$colors->{graph_bg_color}' border='1'>\n");
+		push(@output, "  </table>\n");
+		push(@output, "  <table cellspacing='5' cellpadding='0' width='1' bgcolor='$colors->{graph_bg_color}' border='1'>\n");
 	}
 
 	$e = 0;
@@ -749,8 +776,8 @@ sub zfs_cgi {
 		$str = trim($pl[$n]);
 
 	if($title) {
-		print("    <tr>\n");
-		print("    <td bgcolor='" . $colors->{title_bg_color} . "'>\n");
+		push(@output, "    <tr>\n");
+		push(@output, "    <td bgcolor='" . $colors->{title_bg_color} . "'>\n");
 	}
 	@riglim = @{setup_riglim($rigid[$e + 3], $limit[$e + 3])};
 	undef(@tmp);
@@ -783,6 +810,7 @@ sub zfs_cgi {
 		"--vertical-label=bytes",
 		"--width=$width",
 		"--height=$height",
+		@extra,
 		@riglim,
 		$zoom,
 		@{$cgi->{version12}},
@@ -795,7 +823,7 @@ sub zfs_cgi {
 		@CDEF,
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $IMG_DIR" . "$IMG[$e]: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG[$e]: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
 		$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$e]",
@@ -805,6 +833,7 @@ sub zfs_cgi {
 			"--vertical-label=bytes",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -817,12 +846,12 @@ sub zfs_cgi {
 			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMGz[$e]: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMGz[$e]: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /zfs2/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e] . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e] . "' border='0'></a>\n");
 			} else {
 				if($version eq "new") {
 					$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -831,18 +860,14 @@ sub zfs_cgi {
 					$picz_width = $width + 115;
 					$picz_height = $height + 100;
 				}
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e] . "' border='0'></a>\n");
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e] . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e] . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e] . "'>\n");
 		}
 	}
 	$e++;
 
-	if($title) {
-		print("    </td>\n");
-		print("    <td bgcolor='" . $colors->{title_bg_color} . "'>\n");
-	}
 	@riglim = @{setup_riglim($rigid[$e + 3], $limit[$e + 3])};
 	undef(@tmp);
 	undef(@tmpz);
@@ -874,6 +899,7 @@ sub zfs_cgi {
 		"--vertical-label=Percent (%)",
 		"--width=$width",
 		"--height=$height",
+		@extra,
 		@riglim,
 		$zoom,
 		@{$cgi->{version12}},
@@ -885,7 +911,7 @@ sub zfs_cgi {
 		@CDEF,
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $IMG_DIR" . "$IMG[$e]: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG[$e]: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
 		$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$e]",
@@ -895,6 +921,7 @@ sub zfs_cgi {
 			"--vertical-label=Percent (%)",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -906,12 +933,12 @@ sub zfs_cgi {
 			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMGz[$e]: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMGz[$e]: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /zfs3/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e] . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e] . "' border='0'></a>\n");
 			} else {
 				if($version eq "new") {
 					$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -920,26 +947,212 @@ sub zfs_cgi {
 					$picz_width = $width + 115;
 					$picz_height = $height + 100;
 				}
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e] . "' border='0'></a>\n");
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e] . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e] . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e] . "'>\n");
 		}
 	}
 	$e++;
 
 	if($title) {
-		print("    </td>\n");
-		print("    </tr>\n");
+		push(@output, "    </td>\n");
+		push(@output, "    <td bgcolor='" . $colors->{title_bg_color} . "'>\n");
+	}
+	@riglim = @{setup_riglim($rigid[$e + 3], $limit[$e + 3])};
+	undef(@tmp);
+	undef(@tmpz);
+	undef(@CDEF);
+	push(@tmp, "AREA:oper#00EEEE:Read");
+	push(@tmp, "GPRINT:oper:LAST:                         Current\\: %5.1lf%S\\n");
+	push(@tmp, "AREA:n_opew#4444EE:Write");
+	push(@tmp, "GPRINT:opew:LAST:                        Current\\: %5.1lf%S\\n");
+	push(@tmpz, "AREA:oper#00EEEE:Read");
+	push(@tmpz, "AREA:n_opew#4444EE:Write");
+	if(lc($config->{show_gaps}) eq "y") {
+		push(@tmp, "AREA:wrongdata#$colors->{gap}:");
+		push(@tmpz, "AREA:wrongdata#$colors->{gap}:");
+		push(@CDEF, "CDEF:wrongdata=allvalues,UN,INF,UNKN,IF");
+	}
+	($width, $height) = split('x', $config->{graph_size}->{medium2});
+	if($silent =~ /imagetag/) {
+		($width, $height) = split('x', $config->{graph_size}->{remote}) if $silent eq "imagetag";
+		($width, $height) = split('x', $config->{graph_size}->{main}) if $silent eq "imagetagbig";
+		@tmp = @tmpz;
+		push(@tmp, "COMMENT: \\n");
+		push(@tmp, "COMMENT: \\n");
+		push(@tmp, "COMMENT: \\n");
+	}
+	$pic = $rrd{$version}->("$IMG_DIR" . "$IMG[$e]",
+		"--title=$config->{graphs}->{_zfs6}: $str  ($tf->{nwhen}$tf->{twhen})",
+		"--start=-$tf->{nwhen}$tf->{twhen}",
+		"--imgformat=$imgfmt_uc",
+		"--vertical-label=Number",
+		"--width=$width",
+		"--height=$height",
+		@extra,
+		@riglim,
+		$zoom,
+		@{$cgi->{version12}},
+		@{$cgi->{version12_small}},
+		@{$colors->{graph_colors}},
+		"DEF:oper=$rrd:zfs" . $n . "_oper:AVERAGE",
+		"DEF:opew=$rrd:zfs" . $n . "_opew:AVERAGE",
+		"CDEF:n_opew=opew,-1,*",
+		"CDEF:allvalues=oper,opew,+",
+		@CDEF,
+		@tmp);
+	$err = RRDs::error;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG[$e]: $err\n") if $err;
+	if(lc($config->{enable_zoom}) eq "y") {
+		($width, $height) = split('x', $config->{graph_size}->{zoom});
+		$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$e]",
+			"--title=$config->{graphs}->{_zfs6}: $str  ($tf->{nwhen}$tf->{twhen})",
+			"--start=-$tf->{nwhen}$tf->{twhen}",
+			"--imgformat=$imgfmt_uc",
+			"--vertical-label=Number",
+			"--width=$width",
+			"--height=$height",
+			@extra,
+			@riglim,
+			$zoom,
+			@{$cgi->{version12}},
+			@{$cgi->{version12_small}},
+			@{$colors->{graph_colors}},
+			"DEF:oper=$rrd:zfs" . $n . "_oper:AVERAGE",
+			"DEF:opew=$rrd:zfs" . $n . "_opew:AVERAGE",
+			"CDEF:n_opew=opew,-1,*",
+			"CDEF:allvalues=oper,opew,+",
+			@CDEF,
+			@tmpz);
+		$err = RRDs::error;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMGz[$e]: $err\n") if $err;
+	}
+	if($title || ($silent =~ /imagetag/ && $graph =~ /zfs4/)) {
+		if(lc($config->{enable_zoom}) eq "y") {
+			if(lc($config->{disable_javascript_void}) eq "y") {
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e] . "' border='0'></a>\n");
+			} else {
+				if($version eq "new") {
+					$picz_width = $picz->{image_width} * $config->{global_zoom};
+					$picz_height = $picz->{image_height} * $config->{global_zoom};
+				} else {
+					$picz_width = $width + 115;
+					$picz_height = $height + 100;
+				}
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e] . "' border='0'></a>\n");
+			}
+		} else {
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e] . "'>\n");
+		}
+	}
+	$e++;
+
+	@riglim = @{setup_riglim($rigid[$e + 3], $limit[$e + 3])};
+	undef(@tmp);
+	undef(@tmpz);
+	undef(@CDEF);
+	push(@tmp, "AREA:banr_b#00EEEE:Read");
+	push(@tmp, "GPRINT:banr_b:LAST:                         Current\\: %4.1lf%S\\n");
+	push(@tmp, "AREA:n_banw_b#4444EE:Write");
+	push(@tmp, "GPRINT:banw_b:LAST:                        Current\\: %4.1lf%S\\n");
+	push(@tmpz, "AREA:banr_b#00EEEE:Read");
+	push(@tmpz, "AREA:n_banw_b#4444EE:Write");
+	if(lc($config->{show_gaps}) eq "y") {
+		push(@tmp, "AREA:wrongdata#$colors->{gap}:");
+		push(@tmpz, "AREA:wrongdata#$colors->{gap}:");
+		push(@CDEF, "CDEF:wrongdata=allvalues,UN,INF,UNKN,IF");
+	}
+	($width, $height) = split('x', $config->{graph_size}->{medium2});
+	if($silent =~ /imagetag/) {
+		($width, $height) = split('x', $config->{graph_size}->{remote}) if $silent eq "imagetag";
+		($width, $height) = split('x', $config->{graph_size}->{main}) if $silent eq "imagetagbig";
+		@tmp = @tmpz;
+		push(@tmp, "COMMENT: \\n");
+		push(@tmp, "COMMENT: \\n");
+		push(@tmp, "COMMENT: \\n");
+	}
+	$pic = $rrd{$version}->("$IMG_DIR" . "$IMG[$e]",
+		"--title=$config->{graphs}->{_zfs7}: $str  ($tf->{nwhen}$tf->{twhen})",
+		"--start=-$tf->{nwhen}$tf->{twhen}",
+		"--imgformat=$imgfmt_uc",
+		"--vertical-label=bytes",
+		"--width=$width",
+		"--height=$height",
+		@extra,
+		@riglim,
+		$zoom,
+		@{$cgi->{version12}},
+		@{$cgi->{version12_small}},
+		@{$colors->{graph_colors}},
+		"DEF:banr=$rrd:zfs" . $n . "_banr:AVERAGE",
+		"DEF:banw=$rrd:zfs" . $n . "_banw:AVERAGE",
+		"CDEF:banr_b=banr,1024,*",
+		"CDEF:banw_b=banw,1024,*",
+		"CDEF:n_banw_b=banw_b,-1,*",
+		"CDEF:allvalues=banr,banw,+",
+		@CDEF,
+		@tmp);
+	$err = RRDs::error;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG[$e]: $err\n") if $err;
+	if(lc($config->{enable_zoom}) eq "y") {
+		($width, $height) = split('x', $config->{graph_size}->{zoom});
+		$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$e]",
+			"--title=$config->{graphs}->{_zfs7}: $str  ($tf->{nwhen}$tf->{twhen})",
+			"--start=-$tf->{nwhen}$tf->{twhen}",
+			"--imgformat=$imgfmt_uc",
+			"--vertical-label=bytes",
+			"--width=$width",
+			"--height=$height",
+			@extra,
+			@riglim,
+			$zoom,
+			@{$cgi->{version12}},
+			@{$cgi->{version12_small}},
+			@{$colors->{graph_colors}},
+			"DEF:banr=$rrd:zfs" . $n . "_banr:AVERAGE",
+			"DEF:banw=$rrd:zfs" . $n . "_banw:AVERAGE",
+			"CDEF:banr_b=banr,1024,*",
+			"CDEF:banw_b=banw,1024,*",
+			"CDEF:n_banw_b=banw_b,-1,*",
+			"CDEF:allvalues=banr,banw,+",
+			@CDEF,
+			@tmpz);
+		$err = RRDs::error;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMGz[$e]: $err\n") if $err;
+	}
+	if($title || ($silent =~ /imagetag/ && $graph =~ /zfs5/)) {
+		if(lc($config->{enable_zoom}) eq "y") {
+			if(lc($config->{disable_javascript_void}) eq "y") {
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e] . "' border='0'></a>\n");
+			} else {
+				if($version eq "new") {
+					$picz_width = $picz->{image_width} * $config->{global_zoom};
+					$picz_height = $picz->{image_height} * $config->{global_zoom};
+				} else {
+					$picz_width = $width + 115;
+					$picz_height = $height + 100;
+				}
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$e] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e] . "' border='0'></a>\n");
+			}
+		} else {
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$e] . "'>\n");
+		}
+	}
+	$e++;
+
+	if($title) {
+		push(@output, "    </td>\n");
+		push(@output, "    </tr>\n");
 	}
 
 	}
 
 	if($title) {
-		main::graph_footer();
+		push(@output, main::graph_footer());
 	}
-	print("  <br>\n");
-	return;
+	push(@output, "  <br>\n");
+	return @output;
 }
 
 1;

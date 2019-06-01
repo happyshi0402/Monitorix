@@ -18,7 +18,7 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
 
-package ipmi;
+package ambsens;
 
 use strict;
 use warnings;
@@ -26,13 +26,13 @@ use Monitorix;
 use RRDs;
 use POSIX qw(strftime);
 use Exporter 'import';
-our @EXPORT = qw(ipmi_init ipmi_update ipmi_cgi);
+our @EXPORT = qw(ambsens_init ambsens_update ambsens_cgi);
 
-sub ipmi_init {
+sub ambsens_init {
 	my $myself = (caller(0))[3];
 	my ($package, $config, $debug) = @_;
 	my $rrd = $config->{base_lib} . $package . ".rrd";
-	my $ipmi = $config->{ipmi};
+	my $ambsens = $config->{ambsens};
 
 	my $info;
 	my @ds;
@@ -59,8 +59,8 @@ sub ipmi_init {
 				}
 			}
 		}
-		if(scalar(@ds) / 9 != scalar(my @fl = split(',', $ipmi->{list}))) {
-			logger("$myself: Detected size mismatch between 'list' (" . scalar(my @fl = split(',', $ipmi->{list})) . ") and $rrd (" . scalar(@ds) / 9 . "). Resizing it accordingly. All historical data will be lost. Backup file created.");
+		if(scalar(@ds) / 9 != scalar(my @fl = split(',', $ambsens->{list}))) {
+			logger("$myself: Detected size mismatch between 'list' (" . scalar(my @fl = split(',', $ambsens->{list})) . ") and $rrd (" . scalar(@ds) / 9 . "). Resizing it accordingly. All historical data will be lost. Backup file created.");
 			rename($rrd, "$rrd.bak");
 		}
 		if(scalar(@rra) < 12 + (4 * $config->{max_historic_years})) {
@@ -77,16 +77,16 @@ sub ipmi_init {
 			push(@max, "RRA:MAX:0.5:1440:" . (365 * $n));
 			push(@last, "RRA:LAST:0.5:1440:" . (365 * $n));
 		}
-		for($n = 0; $n < scalar(my @sl = split(',', $ipmi->{list})); $n++) {
-			push(@tmp, "DS:ipmi" . $n . "_s1:GAUGE:120:U:U");
-			push(@tmp, "DS:ipmi" . $n . "_s2:GAUGE:120:U:U");
-			push(@tmp, "DS:ipmi" . $n . "_s3:GAUGE:120:U:U");
-			push(@tmp, "DS:ipmi" . $n . "_s4:GAUGE:120:U:U");
-			push(@tmp, "DS:ipmi" . $n . "_s5:GAUGE:120:U:U");
-			push(@tmp, "DS:ipmi" . $n . "_s6:GAUGE:120:U:U");
-			push(@tmp, "DS:ipmi" . $n . "_s7:GAUGE:120:U:U");
-			push(@tmp, "DS:ipmi" . $n . "_s8:GAUGE:120:U:U");
-			push(@tmp, "DS:ipmi" . $n . "_s9:GAUGE:120:U:U");
+		for($n = 0; $n < scalar(my @sl = split(',', $ambsens->{list})); $n++) {
+			push(@tmp, "DS:ambsens" . $n . "_s1:GAUGE:120:0:U");
+			push(@tmp, "DS:ambsens" . $n . "_s2:GAUGE:120:0:U");
+			push(@tmp, "DS:ambsens" . $n . "_s3:GAUGE:120:0:U");
+			push(@tmp, "DS:ambsens" . $n . "_s4:GAUGE:120:0:U");
+			push(@tmp, "DS:ambsens" . $n . "_s5:GAUGE:120:0:U");
+			push(@tmp, "DS:ambsens" . $n . "_s6:GAUGE:120:0:U");
+			push(@tmp, "DS:ambsens" . $n . "_s7:GAUGE:120:0:U");
+			push(@tmp, "DS:ambsens" . $n . "_s8:GAUGE:120:0:U");
+			push(@tmp, "DS:ambsens" . $n . "_s9:GAUGE:120:0:U");
 		}
 		eval {
 			RRDs::create($rrd,
@@ -123,17 +123,16 @@ sub ipmi_init {
 		}
 	}
 
-	$config->{ipmi_hist_alerts} = ();
+	$config->{ambsens_hist_alerts} = ();
 	push(@{$config->{func_update}}, $package);
 	logger("$myself: Ok") if $debug;
 }
 
-sub ipmi_update {
+sub ambsens_update {
 	my $myself = (caller(0))[3];
 	my ($package, $config, $debug) = @_;
 	my $rrd = $config->{base_lib} . $package . ".rrd";
-	my $ipmi = $config->{ipmi};
-	my $args = $ipmi->{extra_args} || "";
+	my $ambsens = $config->{ambsens};
 
 	my @sens;
 
@@ -141,52 +140,96 @@ sub ipmi_update {
 	my $str;
 	my $rrdata = "N";
 
-	if(!open(IN, "ipmitool $args sdr |")) {
-		logger("$myself: unable to execute 'ipmitool'. $!");
-		return;
-	}
-	my @data = <IN>;
-	close(IN);
-
 	my $e = 0;
-	while($e < scalar(my @sl = split(',', $ipmi->{list}))) {
-		my $e2 = 0;
-		foreach my $i (split(',', $ipmi->{desc}->{$e})) {
-			my $unit;
+	while($e < scalar(my @sl = split(',', $ambsens->{list}))) {
+		my $e2 = 1;
+		foreach my $dl (split(',', $ambsens->{desc}->{$e})) {
+			my $str = trim($dl);
+			my $script = trim($ambsens->{cmd}->{$str});
 
-			$sens[$e][$e2] = 0 unless defined $sens[$e][$e2];
-			$str = trim($i);
-			$unit = $ipmi->{units}->{$e};
-			foreach(@data) {
-				if(/^($str)\s+\|\s+(-?\d+\.*\d*)\s+$unit\s+/) {
-					my $val = $2;
+			if($script) {
+				if(-x $script) {
+					my $val = `$script`;
+					chomp($val);
 					$sens[$e][$e2] = $val;
 
 					# check alerts for each sensor defined
-					$str =~ s/ /_/;
-					my @al = split(',', $ipmi->{alerts}->{$str} || "");
+					my @al = split(',', $ambsens->{alerts}->{$str} || "");
 					if(scalar(@al)) {
 						my $timeintvl = trim($al[0]);
 						my $threshold = trim($al[1]);
 						my $script = trim($al[2]);
-			
-						if(!$threshold || $val < $threshold) {
-							$config->{ipmi_hist_alerts}->{$str} = 0;
-						} else {
-							if(!$config->{ipmi_hist_alerts}->{$str}) {
-								$config->{ipmi_hist_alerts}->{$str} = time;
-							}
-							if($config->{ipmi_hist_alerts}->{$str} > 0 && (time - $config->{ipmi_hist_alerts}->{$str}) >= $timeintvl) {
-								if(-x $script) {
-									logger("$myself: alert on IPMI Sensor ($str): executing script '$script'.");
-									system($script . " " . $timeintvl . " " . $threshold . " " . $val);
+						my $when = lc(trim($al[3] || ""));
+						my @range = split('-', $threshold);
+						$threshold = 0 if !$threshold;
+						if(scalar(@range) == 1) {
+							$when = "above" if !$when;	# 'above' is the default
+							if($when eq "above" && $val < $threshold) {
+								$config->{ambsens_hist_alerts}->{$str} = 0;
+							} elsif($when eq "below" && $val > $threshold) {
+								$config->{ambsens_hist_alerts}->{$str} = 0;
+							} else {
+								if($when eq "above" || $when eq "below") {
+									if(!$config->{ambsens_hist_alerts}->{$str}) {
+										$config->{ambsens_hist_alerts}->{$str} = time;
+									}
+									if($config->{ambsens_hist_alerts}->{$str} > 0 && (time - $config->{ambsens_hist_alerts}->{$str}) >= $timeintvl) {
+										if(-x $script) {
+											logger("$myself: alert on Ambient Sensor ($str): executing script '$script'.");
+											system($script . " " . $timeintvl . " " . $threshold . " " . $val);
+										} else {
+											logger("$myself: ERROR: script '$script' doesn't exist or don't has execution permissions.");
+										}
+										$config->{ambsens_hist_alerts}->{$str} = time;
+									}
 								} else {
-									logger("$myself: ERROR: script '$script' doesn't exist or don't has execution permissions.");
+									logger("$myself: ERROR: invalid when value '$when'");
 								}
-								$config->{ipmi_hist_alerts}->{$str} = time;
 							}
+						} elsif(scalar(@range) == 2) {
+							if($when) {
+								logger("$myself: the forth parameter ('$when') in '$str' is irrelevant when there are range values defined.");
+							}
+							if($range[0] == $range[1]) {
+								logger("$myself: ERROR: range values are identical.");
+							} else {
+								if($val <= $range[0]) {
+									$config->{ambsens_hist_alerts}->{$str}->{above} = 0;
+									if($val < $range[0] && !$config->{ambsens_hist_alerts}->{$str}->{below}) {
+										$config->{ambsens_hist_alerts}->{$str}->{below} = time;
+									}
+								}
+								if($val >= $range[1]) {
+									$config->{ambsens_hist_alerts}->{$str}->{below} = 0;
+									if($val > $range[1] && !$config->{ambsens_hist_alerts}->{$str}->{above}) {
+										$config->{ambsens_hist_alerts}->{$str}->{above} = time;
+									}
+								}
+								if($config->{ambsens_hist_alerts}->{$str}->{below} > 0 && (time - $config->{ambsens_hist_alerts}->{$str}->{below}) >= $timeintvl) {
+									if(-x $script) {
+										logger("$myself: alert on Ambient Sensor ($str): executing script '$script'.");
+										system($script . " " . $timeintvl . " " . $threshold . " " . $val);
+									} else {
+										logger("$myself: ERROR: script '$script' doesn't exist or don't has execution permissions.");
+									}
+									$config->{ambsens_hist_alerts}->{$str}->{below} = time;
+								}
+								if($config->{ambsens_hist_alerts}->{$str}->{above} > 0 && (time - $config->{ambsens_hist_alerts}->{$str}->{above}) >= $timeintvl) {
+									if(-x $script) {
+										logger("$myself: alert on Ambient Sensor ($str): executing script '$script'.");
+										system($script . " " . $timeintvl . " " . $threshold . " " . $val);
+									} else {
+										logger("$myself: ERROR: script '$script' doesn't exist or don't has execution permissions.");
+									}
+									$config->{ambsens_hist_alerts}->{$str}->{above} = time;
+								}
+							}
+						} else {
+							logger("$myself: ERROR: invalid threshold value '$threshold'");
 						}
 					}
+				} else {
+					logger("$myself: ERROR: script '$script' doesn't exist or don't has execution permissions.");
 				}
 			}
 			$e2++;
@@ -195,8 +238,8 @@ sub ipmi_update {
 	}
 
 	$e = 0;
-	while($e < scalar(my @sl = split(',', $ipmi->{list}))) {
-		for($n = 0; $n < 9; $n++) {
+	while($e < scalar(my @sl = split(',', $ambsens->{list}))) {
+		for($n = 1; $n <= 9; $n++) {
 			$sens[$e][$n] = 0 unless defined $sens[$e][$n];
 			$rrdata .= ":" . $sens[$e][$n];
 		}
@@ -209,13 +252,13 @@ sub ipmi_update {
 	logger("ERROR: while updating $rrd: $err") if $err;
 }
 
-sub ipmi_cgi {
+sub ambsens_cgi {
 	my ($package, $config, $cgi) = @_;
 	my @output;
 
-	my $ipmi = $config->{ipmi};
-	my @rigid = split(',', ($ipmi->{rigid} || ""));
-	my @limit = split(',', ($ipmi->{limit} || ""));
+	my $ambsens = $config->{ambsens};
+	my @rigid = split(',', ($ambsens->{rigid} || ""));
+	my @limit = split(',', ($ambsens->{limit} || ""));
 	my $tf = $cgi->{tf};
 	my $colors = $cgi->{colors};
 	my $graph = $cgi->{graph};
@@ -269,7 +312,6 @@ sub ipmi_cgi {
 
 	$title = !$silent ? $title : "";
 
-
 	# text mode
 	#
 	if(lc($config->{iface_mode}) eq "text") {
@@ -289,11 +331,11 @@ sub ipmi_cgi {
 		my $line3;
 		push(@output, "    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
 		push(@output, "    ");
-		for($n = 0; $n < scalar(my @sl = split(',', $ipmi->{list})); $n++) {
+		for($n = 0; $n < scalar(my @sl = split(',', $ambsens->{list})); $n++) {
 			$line1 = "";
-			foreach my $i (split(',', $ipmi->{desc}->{$n})) {
-				$i = trim($i);
-				$str = $ipmi->{map}->{$i} || $i;
+			foreach my $dl (split(',', $ambsens->{desc}->{$n})) {
+				$dl = trim($dl);
+				$str = $ambsens->{map}->{$dl} || $dl;
 				$str = sprintf("%7s", substr($str, 0, 5));
 				$line1 .= "        ";
 				$line2 .= sprintf(" %7s", $str);
@@ -317,13 +359,13 @@ sub ipmi_cgi {
 			$line = @$data[$n];
 			$time = $time - (1 / $tf->{ts});
 			push(@output, sprintf(" %2d$tf->{tc} ", $time));
-			for($n2 = 0; $n2 < scalar(my @sl = split(',', $ipmi->{list})); $n2++) {
+			for($n2 = 0; $n2 < scalar(my @sl = split(',', $ambsens->{list})); $n2++) {
 				$n3 = $n2 * 9;
-				foreach my $i (split(',', $ipmi->{desc}->{$n2})) {
+				foreach my $dl (split(',', $ambsens->{desc}->{$n2})) {
 					$from = $n3++;
 					$to = $from + 1;
 					my ($j) = @$line[$from..$to];
-					push(@output, sprintf("%7.1lf ", $j || 0));
+					push(@output, sprintf("%7.1lf ", celsius_to($config, $j) || 0));
 				}
 			}
 			push(@output, "\n");
@@ -350,7 +392,7 @@ sub ipmi_cgi {
 		$u = "";
 	}
 
-	for($n = 0; $n < scalar(my @sl = split(',', $ipmi->{list})); $n++) {
+	for($n = 0; $n < scalar(my @sl = split(',', $ambsens->{list})); $n++) {
 		$str = $u . $package . $n . "." . $tf->{when} . ".$imgfmt_lc";
 		push(@IMG, $str);
 		unlink("$IMG_DIR" . $str);
@@ -363,15 +405,15 @@ sub ipmi_cgi {
 
 	@riglim = @{setup_riglim($rigid[0], $limit[0])};
 	$n = 0;
-	while($n < scalar(my @sl = split(',', $ipmi->{list}))) {
+	while($n < scalar(my @sl = split(',', $ambsens->{list}))) {
 		if($title) {
 			if($n == 0) {
-				push(@output, main::graph_header($title, $ipmi->{graphs_per_row}));
+				push(@output, main::graph_header($title, $ambsens->{graphs_per_row}));
 			}
 			push(@output, "    <tr>\n");
 		}
-		for($n2 = 0; $n2 < $ipmi->{graphs_per_row}; $n2++) {
-			last unless $n < scalar(my @sl = split(',', $ipmi->{list}));
+		for($n2 = 0; $n2 < $ambsens->{graphs_per_row}; $n2++) {
+			last unless $n < scalar(my @sl = split(',', $ambsens->{list}));
 			if($title) {
 				push(@output, "    <td bgcolor='" . $colors->{title_bg_color} . "'>\n");
 			}
@@ -379,10 +421,10 @@ sub ipmi_cgi {
 			undef(@tmpz);
 			undef(@CDEF);
 			my $e = 0;
-			my $unit = $ipmi->{units}->{$n};
-			foreach my $i (split(',', $ipmi->{desc}->{$n})) {
+			my $unit = $ambsens->{units}->{$n};
+			foreach my $i (split(',', $ambsens->{desc}->{$n})) {
 				$i = trim($i);
-				$str = $ipmi->{map}->{$i} || $i;
+				$str = $ambsens->{map}->{$i} || $i;
 				$str = sprintf("%-40s", substr($str, 0, 40));
 				push(@tmp, "LINE2:s" . ($e + 1) . $LC[$e] . ":$str");
 				push(@tmp, "GPRINT:s" . ($e + 1) . ":LAST: Current\\:%7.1lf\\n");
@@ -413,15 +455,15 @@ sub ipmi_cgi {
 				@{$cgi->{version12}},
 				@{$cgi->{version12_small}},
 				@{$colors->{graph_colors}},
-				"DEF:s1=$rrd:ipmi" . $n . "_s1:AVERAGE",
-				"DEF:s2=$rrd:ipmi" . $n . "_s2:AVERAGE",
-				"DEF:s3=$rrd:ipmi" . $n . "_s3:AVERAGE",
-				"DEF:s4=$rrd:ipmi" . $n . "_s4:AVERAGE",
-				"DEF:s5=$rrd:ipmi" . $n . "_s5:AVERAGE",
-				"DEF:s6=$rrd:ipmi" . $n . "_s6:AVERAGE",
-				"DEF:s7=$rrd:ipmi" . $n . "_s7:AVERAGE",
-				"DEF:s8=$rrd:ipmi" . $n . "_s8:AVERAGE",
-				"DEF:s9=$rrd:ipmi" . $n . "_s9:AVERAGE",
+				"DEF:s1=$rrd:ambsens" . $n . "_s1:AVERAGE",
+				"DEF:s2=$rrd:ambsens" . $n . "_s2:AVERAGE",
+				"DEF:s3=$rrd:ambsens" . $n . "_s3:AVERAGE",
+				"DEF:s4=$rrd:ambsens" . $n . "_s4:AVERAGE",
+				"DEF:s5=$rrd:ambsens" . $n . "_s5:AVERAGE",
+				"DEF:s6=$rrd:ambsens" . $n . "_s6:AVERAGE",
+				"DEF:s7=$rrd:ambsens" . $n . "_s7:AVERAGE",
+				"DEF:s8=$rrd:ambsens" . $n . "_s8:AVERAGE",
+				"DEF:s9=$rrd:ambsens" . $n . "_s9:AVERAGE",
 				"CDEF:allvalues=s1,s2,s3,s4,s5,s6,s7,s8,s9,+,+,+,+,+,+,+,+",
 				@CDEF,
 				@tmp);
@@ -442,22 +484,22 @@ sub ipmi_cgi {
 					@{$cgi->{version12}},
 					@{$cgi->{version12_small}},
 					@{$colors->{graph_colors}},
-					"DEF:s1=$rrd:ipmi" . $n . "_s1:AVERAGE",
-					"DEF:s2=$rrd:ipmi" . $n . "_s2:AVERAGE",
-					"DEF:s3=$rrd:ipmi" . $n . "_s3:AVERAGE",
-					"DEF:s4=$rrd:ipmi" . $n . "_s4:AVERAGE",
-					"DEF:s5=$rrd:ipmi" . $n . "_s5:AVERAGE",
-					"DEF:s6=$rrd:ipmi" . $n . "_s6:AVERAGE",
-					"DEF:s7=$rrd:ipmi" . $n . "_s7:AVERAGE",
-					"DEF:s8=$rrd:ipmi" . $n . "_s8:AVERAGE",
-					"DEF:s9=$rrd:ipmi" . $n . "_s9:AVERAGE",
+					"DEF:s1=$rrd:ambsens" . $n . "_s1:AVERAGE",
+					"DEF:s2=$rrd:ambsens" . $n . "_s2:AVERAGE",
+					"DEF:s3=$rrd:ambsens" . $n . "_s3:AVERAGE",
+					"DEF:s4=$rrd:ambsens" . $n . "_s4:AVERAGE",
+					"DEF:s5=$rrd:ambsens" . $n . "_s5:AVERAGE",
+					"DEF:s6=$rrd:ambsens" . $n . "_s6:AVERAGE",
+					"DEF:s7=$rrd:ambsens" . $n . "_s7:AVERAGE",
+					"DEF:s8=$rrd:ambsens" . $n . "_s8:AVERAGE",
+					"DEF:s9=$rrd:ambsens" . $n . "_s9:AVERAGE",
 					"CDEF:allvalues=s1,s2,s3,s4,s5,s6,s7,s8,s9,+,+,+,+,+,+,+,+",
 					@CDEF,
 					@tmpz);
 				$err = RRDs::error;
 				push(@output, "ERROR: while graphing $IMG_DIR" . "$IMGz[$n]: $err\n") if $err;
 			}
-			if($title || ($silent =~ /imagetag/ && $graph =~ /ipmi$n/)) {
+			if($title || ($silent =~ /imagetag/ && $graph =~ /ambsens$n/)) {
 				if(lc($config->{enable_zoom}) eq "y") {
 					if(lc($config->{disable_javascript_void}) eq "y") {
 						push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$n] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$n] . "' border='0'></a>\n");

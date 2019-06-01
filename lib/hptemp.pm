@@ -1,7 +1,7 @@
 #
 # Monitorix - A lightweight system monitoring tool.
 #
-# Copyright (C) 2005-2016 by Jordi Sanfeliu <jordi@fibranet.cat>
+# Copyright (C) 2005-2019 by Jordi Sanfeliu <jordi@fibranet.cat>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -132,8 +132,42 @@ sub hptemp_init {
 		}
 	}
 
+	$config->{hptemp_hist_alerts} = ();
 	push(@{$config->{func_update}}, $package);
 	logger("$myself: Ok") if $debug;
+}
+
+sub hptemp_alerts {
+	my $myself = (caller(0))[3];
+	my $config = (shift);
+	my $sensor = (shift);
+	my $val = (shift);
+
+	my $hptemp = $config->{hptemp};
+	my @al = split(',', $hptemp->{alerts}->{$sensor} || "");
+
+	if(scalar(@al)) {
+		my $timeintvl = trim($al[0]);
+		my $threshold = trim($al[1]);
+		my $script = trim($al[2]);
+	
+		if(!$threshold || $val < $threshold) {
+			$config->{hptemp_hist_alerts}->{$sensor} = 0;
+		} else {
+			if(!$config->{hptemp_hist_alerts}->{$sensor}) {
+				$config->{hptemp_hist_alerts}->{$sensor} = time;
+			}
+			if($config->{hptemp_hist_alerts}->{$sensor} > 0 && (time - $config->{hptemp_hist_alerts}->{$sensor}) >= $timeintvl) {
+				if(-x $script) {
+					logger("$myself: alert on HP Temp ($sensor): executing script '$script'.");
+					system($script . " " . $timeintvl . " " . $threshold . " " . $val);
+				} else {
+					logger("$myself: ERROR: script '$script' doesn't exist or don't has execution permissions.");
+				}
+				$config->{hptemp_hist_alerts}->{$sensor} = time;
+			}
+		}
+	}
 }
 
 sub hptemp_update {
@@ -165,6 +199,8 @@ sub hptemp_update {
 				chomp($temp);
 				$temp =~ s/C//;
 				push(@hptemp1, map {$_ eq "---" ? 0 : $_} ($temp));
+				# check alerts for each sensor defined
+				hptemp_alerts($config, $str, $temp);
 			}
 		}
 		foreach my $t (split(',', ($hptemp->{graph_1} || ""))) {
@@ -174,6 +210,8 @@ sub hptemp_update {
 				chomp($temp);
 				$temp =~ s/C//;
 				push(@hptemp2, map {$_ eq "---" ? 0 : $_} ($temp));
+				# check alerts for each sensor defined
+				hptemp_alerts($config, $str, $temp);
 			}
 		}
 		foreach my $t (split(',', ($hptemp->{graph_2} || ""))) {
@@ -183,6 +221,8 @@ sub hptemp_update {
 				chomp($temp);
 				$temp =~ s/C//;
 				push(@hptemp3, map {$_ eq "---" ? 0 : $_} ($temp));
+				# check alerts for each sensor defined
+				hptemp_alerts($config, $str, $temp);
 			}
 		}
 	}
@@ -207,6 +247,7 @@ sub hptemp_update {
 
 sub hptemp_cgi {
 	my ($package, $config, $cgi) = @_;
+	my @output;
 
 	my $hptemp = $config->{hptemp};
 	my @rigid = split(',', ($hptemp->{rigid} || ""));
@@ -229,6 +270,7 @@ sub hptemp_cgi {
 	my $u = "";
 	my $width;
 	my $height;
+	my @extra;
 	my @riglim;
 	my $temp_scale = "Celsius";
 	my @tmp;
@@ -255,6 +297,9 @@ sub hptemp_cgi {
 	my $IMG_DIR = $config->{base_dir} . "/" . $config->{imgs_dir};
 	my $imgfmt_uc = uc($config->{image_format});
 	my $imgfmt_lc = lc($config->{image_format});
+	foreach my $i (split(',', $config->{rrdtool_extra_options} || "")) {
+		push(@extra, trim($i)) if trim($i);
+	}
 
 	$title = !$silent ? $title : "";
 
@@ -275,20 +320,20 @@ sub hptemp_cgi {
 	#
 	if(lc($config->{iface_mode}) eq "text") {
 		if($title) {
-			main::graph_header($title, 2);
-			print("    <tr>\n");
-			print("    <td bgcolor='$colors->{title_bg_color}'>\n");
+			push(@output, main::graph_header($title, 2));
+			push(@output, "    <tr>\n");
+			push(@output, "    <td bgcolor='$colors->{title_bg_color}'>\n");
 		}
 		my (undef, undef, undef, $data) = RRDs::fetch("$rrd",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
 			"AVERAGE",
 			"-r $tf->{res}");
 		$err = RRDs::error;
-		print("ERROR: while fetching $rrd: $err\n") if $err;
+		push(@output, "ERROR: while fetching $rrd: $err\n") if $err;
 		my $str;
 		my $line1;
 		my $line2;
-		print("    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
+		push(@output, "    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
 		foreach my $t (split(',', $hptemp->{graph_0}), split(',', $hptemp->{graph_1}), split(',', $hptemp->{graph_2})) {
 			$id = sprintf("%2d", trim($t));
 			for($n = 0; $n < scalar(@hplog); $n++) {
@@ -302,8 +347,8 @@ sub hptemp_cgi {
 				}
 			}
 		}
-		print("Time $line1 \n");
-		print("-----$line2\n");
+		push(@output, "Time $line1 \n");
+		push(@output, "-----$line2\n");
 		my $line;
 		my @row;
 		my $time;
@@ -311,7 +356,7 @@ sub hptemp_cgi {
 		for($n = 0, $time = $tf->{tb}; $n < ($tf->{tb} * $tf->{ts}); $n++) {
 			$line = @$data[$n];
 			$time = $time - (1 / $tf->{ts});
-			printf(" %2d$tf->{tc} ", $time);
+			push(@output, sprintf(" %2d$tf->{tc} ", $time));
 			undef($line1);
 			undef(@row);
 			for($n2 = 0; $n2 < scalar(my @hp = split(',', $hptemp->{graph_0})); $n2++) {
@@ -329,17 +374,17 @@ sub hptemp_cgi {
 				push(@row, celsius_to($config, $temp));
 				$line1 .= " %8.0f ";
 			}
-			print(sprintf($line1, @row));
-			print("\n");
+			push(@output, (sprintf($line1, @row)));
+			push(@output, "\n");
 		}
-		print("    </pre>\n");
+		push(@output, "    </pre>\n");
 		if($title) {
-			print("    </td>\n");
-			print("    </tr>\n");
-			main::graph_footer();
+			push(@output, "    </td>\n");
+			push(@output, "    </tr>\n");
+			push(@output, main::graph_footer());
 		}
-		print("  <br>\n");
-		return;
+		push(@output, "  <br>\n");
+		return @output;
 	}
 
 
@@ -370,9 +415,9 @@ sub hptemp_cgi {
 	}
 
 	if($title) {
-		main::graph_header($title, 2);
-		print("    <tr>\n");
-		print("    <td bgcolor='$colors->{title_bg_color}'>\n");
+		push(@output, main::graph_header($title, 2));
+		push(@output, "    <tr>\n");
+		push(@output, "    <td bgcolor='$colors->{title_bg_color}'>\n");
 	}
 
 	@riglim = @{setup_riglim($rigid[0], $limit[0])};
@@ -438,6 +483,7 @@ sub hptemp_cgi {
 			"--vertical-label=$temp_scale",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -455,7 +501,7 @@ sub hptemp_cgi {
 			@tmp,
 			"COMMENT: \\n");
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG1: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG1: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
 			$picz = $rrd{$version}->("$IMG_DIR" . "$IMG1z",
@@ -465,6 +511,7 @@ sub hptemp_cgi {
 				"--vertical-label=$temp_scale",
 				"--width=$width",
 				"--height=$height",
+				@extra,
 				@riglim,
 				$zoom,
 				@{$cgi->{version12}},
@@ -481,12 +528,12 @@ sub hptemp_cgi {
 				@CDEF,
 				@tmpz);
 			$err = RRDs::error;
-			print("ERROR: while graphing $IMG_DIR" . "$IMG1z: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG1z: $err\n") if $err;
 		}
 		if($title || ($silent =~ /imagetag/ && $graph =~ /hptemp1/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
-					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "' border='0'></a>\n");
+					push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "' border='0'></a>\n");
 				} else {
 					if($version eq "new") {
 						$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -495,17 +542,17 @@ sub hptemp_cgi {
 						$picz_width = $width + 115;
 						$picz_height = $height + 100;
 					}
-					print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "' border='0'></a>\n");
+					push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "' border='0'></a>\n");
 				}
 			} else {
-				print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "'>\n");
+				push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "'>\n");
 			}
 		}
 	}
 
 	if($title) {
-		print("    </td>\n");
-		print("    <td valign='top' bgcolor='" . $colors->{title_bg_color} . "'>\n");
+		push(@output, "    </td>\n");
+		push(@output, "    <td valign='top' bgcolor='" . $colors->{title_bg_color} . "'>\n");
 	}
 	@riglim = @{setup_riglim($rigid[1], $limit[1])};
 	if(scalar(my @hptemp1 = split(',', ($hptemp->{graph_1} || "")))) {
@@ -569,6 +616,7 @@ sub hptemp_cgi {
 			"--width=$width",
 			"--height=$height",
 			"--lower-limit=0",
+			@extra,
 			$zoom,
 			@{$cgi->{version12}},
 			@{$cgi->{version12_small}},
@@ -583,7 +631,7 @@ sub hptemp_cgi {
 			@CDEF,
 			@tmp);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG2: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG2: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
 			$picz = $rrd{$version}->("$IMG_DIR" . "$IMG2z",
@@ -594,6 +642,7 @@ sub hptemp_cgi {
 				"--width=$width",
 				"--height=$height",
 				"--lower-limit=0",
+				@extra,
 				$zoom,
 				@{$cgi->{version12}},
 				@{$cgi->{version12_small}},
@@ -608,12 +657,12 @@ sub hptemp_cgi {
 				@CDEF,
 				@tmpz);
 			$err = RRDs::error;
-			print("ERROR: while graphing $IMG_DIR" . "$IMG2z: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG2z: $err\n") if $err;
 		}
 		if($title || ($silent =~ /imagetag/ && $graph =~ /hptemp2/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
-					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "' border='0'></a>\n");
+					push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "' border='0'></a>\n");
 				} else {
 					if($version eq "new") {
 						$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -622,10 +671,10 @@ sub hptemp_cgi {
 						$picz_width = $width + 115;
 						$picz_height = $height + 100;
 					}
-					print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "' border='0'></a>\n");
+					push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "' border='0'></a>\n");
 				}
 			} else {
-				print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "'>\n");
+				push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "'>\n");
 			}
 		}
 	}
@@ -692,6 +741,7 @@ sub hptemp_cgi {
 			"--width=$width",
 			"--height=$height",
 			"--lower-limit=0",
+			@extra,
 			$zoom,
 			@{$cgi->{version12}},
 			@{$cgi->{version12_small}},
@@ -706,7 +756,7 @@ sub hptemp_cgi {
 			@CDEF,
 			@tmp);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG3: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG3: $err\n") if $err;
 		if(lc($config->{enable_zoom}) eq "y") {
 			($width, $height) = split('x', $config->{graph_size}->{zoom});
 			$picz = $rrd{$version}->("$IMG_DIR" . "$IMG3z",
@@ -717,6 +767,7 @@ sub hptemp_cgi {
 				"--width=$width",
 				"--height=$height",
 				"--lower-limit=0",
+				@extra,
 				$zoom,
 				@{$cgi->{version12}},
 				@{$cgi->{version12_small}},
@@ -731,12 +782,12 @@ sub hptemp_cgi {
 				@CDEF,
 				@tmpz);
 			$err = RRDs::error;
-			print("ERROR: while graphing $IMG_DIR" . "$IMG3z: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG3z: $err\n") if $err;
 		}
 		if($title || ($silent =~ /imagetag/ && $graph =~ /hptemp3/)) {
 			if(lc($config->{enable_zoom}) eq "y") {
 				if(lc($config->{disable_javascript_void}) eq "y") {
-					print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "' border='0'></a>\n");
+					push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "' border='0'></a>\n");
 				} else {
 					if($version eq "new") {
 						$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -745,21 +796,21 @@ sub hptemp_cgi {
 						$picz_width = $width + 115;
 						$picz_height = $height + 100;
 					}
-					print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "' border='0'></a>\n");
+					push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "' border='0'></a>\n");
 				}
 			} else {
-				print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "'>\n");
+				push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "'>\n");
 			}
 		}
 	}
 
 	if($title) {
-		print("    </td>\n");
-		print("    </tr>\n");
-		main::graph_footer();
+		push(@output, "    </td>\n");
+		push(@output, "    </tr>\n");
+		push(@output, main::graph_footer());
 	}
-	print("  <br>\n");
-	return;
+	push(@output, "  <br>\n");
+	return @output;
 }
 
 1;

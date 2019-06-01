@@ -1,7 +1,7 @@
 #
 # Monitorix - A lightweight system monitoring tool.
 #
-# Copyright (C) 2005-2016 by Jordi Sanfeliu <jordi@fibranet.cat>
+# Copyright (C) 2005-2019 by Jordi Sanfeliu <jordi@fibranet.cat>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -142,48 +142,70 @@ sub fail2ban_update {
 	my $str;
 	my $rrdata = "N";
 
-	if(! -r $config->{fail2ban_log}) {
-		logger("Couldn't find file '$config->{fail2ban_log}': $!");
-		return;
-	}
-
-	$seek_pos = $config->{fail2ban_hist} || 0;
-	$seek_pos = defined($seek_pos) ? int($seek_pos) : 0;
-	open(IN, $config->{fail2ban_log});
-	if(!seek(IN, 0, 2)) {
-		logger("Couldn't seek to the end of '$config->{fail2ban_log}': $!");
-		return;
-	}
-	$logsize = tell(IN);
-	if($logsize < $seek_pos) {
-		$seek_pos = 0;
-	}
-	if(!seek(IN, $seek_pos, 0)) {
-		logger("Couldn't seek to $seek_pos in '$config->{fail2ban_log}': $!");
-		return;
-	}
-	if($config->{fail2ban_hist} > 0) {	# avoids initial peak
-		my $date = strftime("%Y-%m-%d", localtime);
-		while(<IN>) {
-			if(/^$date/) {
-				my $e = 0;
-				while($e < scalar(my @fl = split(',', $fail2ban->{list}))) {
-					my $e2 = 0;
-					foreach my $i (split(',', $fail2ban->{desc}->{$e})) {
-						($str = trim($i)) =~ s/\[/\\[/;
-						$str =~ s/\]/\\]/;
-						$jails[$e][$e2] = 0 unless defined $jails[$e][$e2];
-						if(/ $str Ban /) {
-							$jails[$e][$e2]++;
+	if(lc($fail2ban->{graph_mode} || "") ne "rate") {
+		my $e = 0;
+		while($e < scalar(my @fl = split(',', $fail2ban->{list}))) {
+			my $e2 = 0;
+			foreach my $i (split(',', $fail2ban->{desc}->{$e})) {
+				($str = trim($i)) =~ s/\[//;
+				$str =~ s/\]//;
+				$jails[$e][$e2] = 0 unless defined $jails[$e][$e2];
+				if(open(IN, "fail2ban-client status $str |")) {
+					while(<IN>) {
+						if(/- Currently banned:\s+(\d+)$/) {
+							$jails[$e][$e2] = $1;
 						}
-						$e2++;
 					}
-					$e++;
+					close(IN);
+				}
+				$e2++;
+			}
+			$e++;
+		}
+	} else {
+		if(! -r $config->{fail2ban_log}) {
+			logger("Couldn't find file '$config->{fail2ban_log}': $!");
+			return;
+		}
+
+		$seek_pos = $config->{fail2ban_hist} || 0;
+		$seek_pos = defined($seek_pos) ? int($seek_pos) : 0;
+		open(IN, $config->{fail2ban_log});
+		if(!seek(IN, 0, 2)) {
+			logger("Couldn't seek to the end of '$config->{fail2ban_log}': $!");
+			return;
+		}
+		$logsize = tell(IN);
+		if($logsize < $seek_pos) {
+			$seek_pos = 0;
+		}
+		if(!seek(IN, $seek_pos, 0)) {
+			logger("Couldn't seek to $seek_pos in '$config->{fail2ban_log}': $!");
+			return;
+		}
+		if($config->{fail2ban_hist} > 0) {	# avoids initial peak
+			my $date = strftime("%Y-%m-%d", localtime);
+			while(<IN>) {
+				if(/^$date/) {
+					my $e = 0;
+					while($e < scalar(my @fl = split(',', $fail2ban->{list}))) {
+						my $e2 = 0;
+						foreach my $i (split(',', $fail2ban->{desc}->{$e})) {
+							($str = trim($i)) =~ s/\[/\\[/;
+							$str =~ s/\]/\\]/;
+							$jails[$e][$e2] = 0 unless defined $jails[$e][$e2];
+							if(/ $str Ban /) {
+								$jails[$e][$e2]++;
+							}
+							$e2++;
+						}
+						$e++;
+					}
 				}
 			}
 		}
+		close(IN);
 	}
-	close(IN);
 
 	my $e = 0;
 	while($e < scalar(my @fl = split(',', $fail2ban->{list}))) {
@@ -204,6 +226,7 @@ sub fail2ban_update {
 
 sub fail2ban_cgi {
 	my ($package, $config, $cgi) = @_;
+	my @output;
 
 	my $fail2ban = $config->{fail2ban};
 	my @rigid = split(',', ($fail2ban->{rigid} || ""));
@@ -226,12 +249,14 @@ sub fail2ban_cgi {
 	my $u = "";
 	my $width;
 	my $height;
+	my @extra;
 	my @riglim;
 	my @IMG;
 	my @IMGz;
 	my @tmp;
 	my @tmpz;
 	my @CDEF;
+	my $vlabel = "Bans";
 	my $n;
 	my $n2;
 	my $str;
@@ -254,6 +279,12 @@ sub fail2ban_cgi {
 	my $IMG_DIR = $config->{base_dir} . "/" . $config->{imgs_dir};
 	my $imgfmt_uc = uc($config->{image_format});
 	my $imgfmt_lc = lc($config->{image_format});
+	foreach my $i (split(',', $config->{rrdtool_extra_options} || "")) {
+		push(@extra, trim($i)) if trim($i);
+	}
+	if(lc($fail2ban->{graph_mode} || "") eq "rate") {
+		$vlabel = "Bans/min";
+	}
 
 	$title = !$silent ? $title : "";
 
@@ -262,21 +293,21 @@ sub fail2ban_cgi {
 	#
 	if(lc($config->{iface_mode}) eq "text") {
 		if($title) {
-			main::graph_header($title, 2);
-			print("    <tr>\n");
-			print("    <td bgcolor='$colors->{title_bg_color}'>\n");
+			push(@output, main::graph_header($title, 2));
+			push(@output, "    <tr>\n");
+			push(@output, "    <td bgcolor='$colors->{title_bg_color}'>\n");
 		}
 		my (undef, undef, undef, $data) = RRDs::fetch("$rrd",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
 			"AVERAGE",
 			"-r $tf->{res}");
 		$err = RRDs::error;
-		print("ERROR: while fetching $rrd: $err\n") if $err;
+		push(@output, "ERROR: while fetching $rrd: $err\n") if $err;
 		my $line1;
 		my $line2;
 		my $line3;
-		print("    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
-		print("    ");
+		push(@output, "    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
+		push(@output, "    ");
 		for($n = 0; $n < scalar(my @fl = split(',', $fail2ban->{list})); $n++) {
 			$line1 = "";
 			foreach my $i (split(',', $fail2ban->{desc}->{$n})) {
@@ -287,12 +318,12 @@ sub fail2ban_cgi {
 			}
 			if($line1) {
 				my $i = length($line1);
-				printf(sprintf("%${i}s", sprintf("%s", trim($fl[$n]))));
+				push(@output, sprintf(sprintf("%${i}s", sprintf("%s", trim($fl[$n])))));
 			}
 		}
-		print("\n");
-		print("Time$line2\n");
-		print("----$line3 \n");
+		push(@output, "\n");
+		push(@output, "Time$line2\n");
+		push(@output, "----$line3 \n");
 		my $line;
 		my @row;
 		my $time;
@@ -303,7 +334,7 @@ sub fail2ban_cgi {
 		for($n = 0, $time = $tf->{tb}; $n < ($tf->{tb} * $tf->{ts}); $n++) {
 			$line = @$data[$n];
 			$time = $time - (1 / $tf->{ts});
-			printf(" %2d$tf->{tc} ", $time);
+			push(@output, sprintf(" %2d$tf->{tc} ", $time));
 			for($n2 = 0; $n2 < scalar(my @fl = split(',', $fail2ban->{list})); $n2++) {
 				$n3 = 0;
 				foreach my $i (split(',', $fail2ban->{desc}->{$n2})) {
@@ -311,19 +342,19 @@ sub fail2ban_cgi {
 					$to = $from + 1;
 					my ($j) = @$line[$from..$to];
 					@row = ($j);
-					printf("%20d ", @row);
+					push(@output, sprintf("%20d ", @row));
 				}
 			}
-			print("\n");
+			push(@output, "\n");
 		}
-		print("    </pre>\n");
+		push(@output, "    </pre>\n");
 		if($title) {
-			print("    </td>\n");
-			print("    </tr>\n");
-			main::graph_footer();
+			push(@output, "    </td>\n");
+			push(@output, "    </tr>\n");
+			push(@output, main::graph_footer());
 		}
-		print("  <br>\n");
-		return;
+		push(@output, "  <br>\n");
+		return @output;
 	}
 
 
@@ -354,14 +385,14 @@ sub fail2ban_cgi {
 	while($n < scalar(my @fl = split(',', $fail2ban->{list}))) {
 		if($title) {
 			if($n == 0) {
-				main::graph_header($title, $fail2ban->{graphs_per_row});
+				push(@output, main::graph_header($title, $fail2ban->{graphs_per_row}));
 			}
-			print("    <tr>\n");
+			push(@output, "    <tr>\n");
 		}
 		for($n2 = 0; $n2 < $fail2ban->{graphs_per_row}; $n2++) {
 			last unless $n < scalar(my @fl = split(',', $fail2ban->{list}));
 			if($title) {
-				print("    <td bgcolor='" . $colors->{title_bg_color} . "'>\n");
+				push(@output, "    <td bgcolor='" . $colors->{title_bg_color} . "'>\n");
 			}
 			undef(@tmp);
 			undef(@tmpz);
@@ -369,11 +400,10 @@ sub fail2ban_cgi {
 			my $e = 0;
 			foreach my $i (split(',', $fail2ban->{desc}->{$n})) {
 				$str = sprintf("%-25s", substr(trim($i), 0, 25));
-				push(@tmp, "LINE1:j" . ($e + 1) . $LC[$e] . ":$str");
-				push(@tmp, "GPRINT:j" . ($e + 1) . ":LAST: Cur\\:%2.0lf\\g");
-				push(@tmp, "GPRINT:j" . ($e + 1) . ":AVERAGE:   Avg\\:%2.0lf\\g");
-				push(@tmp, "GPRINT:j" . ($e + 1) . ":MIN:   Min\\:%2.0lf\\g");
-				push(@tmp, "GPRINT:j" . ($e + 1) . ":MAX:   Max\\:%2.0lf\\n");
+				push(@tmp, "LINE2:j" . ($e + 1) . $LC[$e] . ":$str");
+				push(@tmp, "GPRINT:j" . ($e + 1) . ":LAST:Cur\\:%4.0lf\\g");
+				push(@tmp, "GPRINT:j" . ($e + 1) . ":AVERAGE:    Avg\\:%4.0lf\\g");
+				push(@tmp, "GPRINT:j" . ($e + 1) . ":MAX:    Max\\:%4.0lf\\n");
 				push(@tmpz, "LINE2:j" . ($e + 1) . $LC[$e] . ":$str");
 				$e++;
 			}
@@ -392,9 +422,10 @@ sub fail2ban_cgi {
 				"--title=$str  ($tf->{nwhen}$tf->{twhen})",
 				"--start=-$tf->{nwhen}$tf->{twhen}",
 				"--imgformat=$imgfmt_uc",
-				"--vertical-label=Bans/min",
+				"--vertical-label=$vlabel",
 				"--width=$width",
 				"--height=$height",
+				@extra,
 				@riglim,
 				$zoom,
 				@{$cgi->{version12}},
@@ -413,16 +444,17 @@ sub fail2ban_cgi {
 				@CDEF,
 				@tmp);
 			$err = RRDs::error;
-			print("ERROR: while graphing $IMG_DIR" . "$IMG[$n]: $err\n") if $err;
+			push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG[$n]: $err\n") if $err;
 			if(lc($config->{enable_zoom}) eq "y") {
 				($width, $height) = split('x', $config->{graph_size}->{zoom});
 				$picz = $rrd{$version}->("$IMG_DIR" . "$IMGz[$n]",
 					"--title=$str  ($tf->{nwhen}$tf->{twhen})",
 					"--start=-$tf->{nwhen}$tf->{twhen}",
 					"--imgformat=$imgfmt_uc",
-					"--vertical-label=Bans/min",
+					"--vertical-label=$vlabel",
 					"--width=$width",
 					"--height=$height",
+					@extra,
 					@riglim,
 					$zoom,
 					@{$cgi->{version12}},
@@ -441,12 +473,12 @@ sub fail2ban_cgi {
 					@CDEF,
 					@tmpz);
 				$err = RRDs::error;
-				print("ERROR: while graphing $IMG_DIR" . "$IMGz[$n]: $err\n") if $err;
+				push(@output, "ERROR: while graphing $IMG_DIR" . "$IMGz[$n]: $err\n") if $err;
 			}
 			if($title || ($silent =~ /imagetag/ && $graph =~ /fail2ban$n/)) {
 				if(lc($config->{enable_zoom}) eq "y") {
 					if(lc($config->{disable_javascript_void}) eq "y") {
-						print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$n] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$n] . "' border='0'></a>\n");
+						push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$n] . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$n] . "' border='0'></a>\n");
 					} else {
 						if($version eq "new") {
 							$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -455,26 +487,26 @@ sub fail2ban_cgi {
 							$picz_width = $width + 115;
 							$picz_height = $height + 100;
 						}
-						print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$n] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$n] . "' border='0'></a>\n");
+						push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMGz[$n] . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$n] . "' border='0'></a>\n");
 					}
 				} else {
-					print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$n] . "'>\n");
+					push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG[$n] . "'>\n");
 				}
 			}
 			if($title) {
-				print("    </td>\n");
+				push(@output, "    </td>\n");
 			}
 			$n++;
 		}
 		if($title) {
-			print("    </tr>\n");
+			push(@output, "    </tr>\n");
 		}
 	}
 	if($title) {
-		main::graph_footer();
+		push(@output, main::graph_footer());
 	}
-	print("  <br>\n");
-	return;
+	push(@output, "  <br>\n");
+	return @output;
 }
 
 1;

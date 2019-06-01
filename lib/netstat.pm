@@ -1,7 +1,7 @@
 #
 # Monitorix - A lightweight system monitoring tool.
 #
-# Copyright (C) 2005-2016 by Jordi Sanfeliu <jordi@fibranet.cat>
+# Copyright (C) 2005-2019 by Jordi Sanfeliu <jordi@fibranet.cat>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -179,65 +179,118 @@ sub netstat_update {
 	my $rrdata = "N";
 
 	if($config->{os} eq "Linux") {
-		if(open(IN, "netstat -tn -A inet |")) {
-			while(<IN>) {
-				my $last = (split(' ', $_))[-1];
-				$i4_closed++ if trim($last) eq "CLOSED";
-				$i4_synsent++ if trim($last) eq "SYN_SENT";
-				$i4_synrecv++ if trim($last) eq "SYN_RECV";
-				$i4_estblshd++ if trim($last) eq "ESTABLISHED";
-				$i4_finwait1++ if trim($last) eq "FIN_WAIT1";
-				$i4_finwait2++ if trim($last) eq "FIN_WAIT2";
-				$i4_closing++ if trim($last) eq "CLOSING";
-				$i4_timewait++ if trim($last) eq "TIME_WAIT";
-				$i4_closewait++ if trim($last) eq "CLOSE_WAIT";
-				$i4_lastack++ if trim($last) eq "LAST_ACK";
-				$i4_unknown++ if trim($last) eq "UNKNOWN";
+		my $cmd = $config->{netstat}->{cmd} || "";
+		if(!$cmd || $cmd eq "ss") {
+			if(open(IN, "ss -na -f inet |")) {
+				while(<IN>) {
+					m/^(\S+)\s+(\S+)/;
+					my $proto = $1 || '';
+					my $state = $2 || '';
+					if ($proto eq 'tcp') {
+						if    ($state eq "LISTEN")     { $i4_listen++ }
+						elsif ($state eq "ESTAB")      { $i4_estblshd++ }
+						elsif ($state eq "TIME-WAIT")  { $i4_timewait++ }
+						elsif ($state eq "CLOSE-WAIT") { $i4_closewait++ }
+						elsif ($state eq "FIN-WAIT-1")  { $i4_finwait1++ }
+						elsif ($state eq "FIN-WAIT-2")  { $i4_finwait2++ }
+						elsif ($state eq "SYN-SENT")   { $i4_synsent++ }
+						elsif ($state eq "SYN-RECV")   { $i4_synrecv++ }
+						elsif ($state eq "CLOSING")    { $i4_closing++ }
+						elsif ($state eq "LAST-ACK")   { $i4_lastack++ }
+						elsif ($state eq "UNCONN")     { $i4_closed++ }
+						elsif ($state eq "UNKNOWN")    { $i4_unknown++ }
+					} elsif ($proto eq 'udp') {
+						$i4_udp++;
+					}
+				}
+				close(IN);
 			}
-			close(IN);
+			if(open(IN, "ss -na -f inet6 |")) {
+				while(<IN>) {
+					m/^(\S+)\s+(\S+)/;
+					my $proto = $1 || '';
+					my $state = $2 || '';
+					if ($proto eq 'tcp') {
+						if    ($state eq "LISTEN")     { $i6_listen++ }
+						elsif ($state eq "ESTAB")      { $i6_estblshd++ }
+						elsif ($state eq "TIME-WAIT")  { $i6_timewait++ }
+						elsif ($state eq "CLOSE-WAIT") { $i6_closewait++ }
+						elsif ($state eq "FIN-WAIT-1")  { $i6_finwait1++ }
+						elsif ($state eq "FIN-WAIT-2")  { $i6_finwait2++ }
+						elsif ($state eq "SYN-SENT")   { $i6_synsent++ }
+						elsif ($state eq "SYN-RECV")   { $i6_synrecv++ }
+						elsif ($state eq "CLOSING")    { $i6_closing++ }
+						elsif ($state eq "LAST-ACK")   { $i6_lastack++ }
+						elsif ($state eq "UNCONN")     { $i6_closed++ }
+						elsif ($state eq "UNKNOWN")    { $i6_unknown++ }
+					} elsif ($proto eq 'udp') {
+						$i6_udp++;
+					}
+				}
+				close(IN);
+			}
 		}
-		if(open(IN, "netstat -ltn -A inet |")) {
-			while(<IN>) {
-				my $last = (split(' ', $_))[-1];
-				$i4_listen++ if trim($last) eq "LISTEN";
+		if($cmd eq "netstat") {
+			if(open(IN, "netstat -tn -A inet |")) {
+				while(<IN>) {
+					my $last = (split(' ', $_))[-1];
+					$i4_closed++ if trim($last) eq "CLOSED";
+					$i4_synsent++ if trim($last) eq "SYN_SENT";
+					$i4_synrecv++ if trim($last) eq "SYN_RECV";
+					$i4_estblshd++ if trim($last) eq "ESTABLISHED";
+					$i4_finwait1++ if trim($last) eq "FIN_WAIT1";
+					$i4_finwait2++ if trim($last) eq "FIN_WAIT2";
+					$i4_closing++ if trim($last) eq "CLOSING";
+					$i4_timewait++ if trim($last) eq "TIME_WAIT";
+					$i4_closewait++ if trim($last) eq "CLOSE_WAIT";
+					$i4_lastack++ if trim($last) eq "LAST_ACK";
+					$i4_unknown++ if trim($last) eq "UNKNOWN";
+				}
+				close(IN);
 			}
-			close(IN);
-		}
-		if(open(IN, "netstat -lun -A inet |")) {
-			while(<IN>) {
-				$i4_udp++ if /^udp\s+/;
+			if(open(IN, "netstat -ltn -A inet |")) {
+				while(<IN>) {
+					my $last = (split(' ', $_))[-1];
+					$i4_listen++ if trim($last) eq "LISTEN";
+				}
+				close(IN);
 			}
-			close(IN);
-		}
-		if(open(IN, "netstat -tn -A inet6 |")) {
-			while(<IN>) {
-				my $last = (split(' ', $_))[-1];
-				$i6_closed++ if trim($last) eq "CLOSED";
-				$i6_synsent++ if trim($last) eq "SYN_SENT";
-				$i6_synrecv++ if trim($last) eq "SYN_RECV";
-				$i6_estblshd++ if trim($last) eq "ESTABLISHED";
-				$i6_finwait1++ if trim($last) eq "FIN_WAIT1";
-				$i6_finwait2++ if trim($last) eq "FIN_WAIT2";
-				$i6_closing++ if trim($last) eq "CLOSING";
-				$i6_timewait++ if trim($last) eq "TIME_WAIT";
-				$i6_closewait++ if trim($last) eq "CLOSE_WAIT";
-				$i6_lastack++ if trim($last) eq "LAST_ACK";
-				$i6_unknown++ if trim($last) eq "UNKNOWN";
+			if(open(IN, "netstat -lun -A inet |")) {
+				while(<IN>) {
+					$i4_udp++ if /^udp\s+/;
+				}
+				close(IN);
 			}
-			close(IN);
-		}
-		if(open(IN, "netstat -ltn -A inet6 |")) {
-			while(<IN>) {
-				my $last = (split(' ', $_))[-1];
-				$i6_listen++ if trim($last) eq "LISTEN";
+			if(open(IN, "netstat -tn -A inet6 |")) {
+				while(<IN>) {
+					my $last = (split(' ', $_))[-1];
+					$i6_closed++ if trim($last) eq "CLOSED";
+					$i6_synsent++ if trim($last) eq "SYN_SENT";
+					$i6_synrecv++ if trim($last) eq "SYN_RECV";
+					$i6_estblshd++ if trim($last) eq "ESTABLISHED";
+					$i6_finwait1++ if trim($last) eq "FIN_WAIT1";
+					$i6_finwait2++ if trim($last) eq "FIN_WAIT2";
+					$i6_closing++ if trim($last) eq "CLOSING";
+					$i6_timewait++ if trim($last) eq "TIME_WAIT";
+					$i6_closewait++ if trim($last) eq "CLOSE_WAIT";
+					$i6_lastack++ if trim($last) eq "LAST_ACK";
+					$i6_unknown++ if trim($last) eq "UNKNOWN";
+				}
+				close(IN);
 			}
-			close(IN);
-		}
-		if(open(IN, "netstat -lun -A inet6 |")) {
-			while(<IN>) {
-				$i6_udp++ if /^udp[ 6]\s+/;
+			if(open(IN, "netstat -ltn -A inet6 |")) {
+				while(<IN>) {
+					my $last = (split(' ', $_))[-1];
+					$i6_listen++ if trim($last) eq "LISTEN";
+				}
+				close(IN);
 			}
-			close(IN);
+			if(open(IN, "netstat -lun -A inet6 |")) {
+				while(<IN>) {
+					$i6_udp++ if /^udp[ 6]\s+/;
+				}
+				close(IN);
+			}
 		}
 	} elsif(grep {$_ eq $config->{os}} ("FreeBSD", "OpenBSD")) {
 		if(open(IN, "netstat -na -p tcp -f inet |")) {
@@ -299,6 +352,7 @@ sub netstat_update {
 
 sub netstat_cgi {
 	my ($package, $config, $cgi) = @_;
+	my @output;
 
 	my $netstat = $config->{netstat};
 	my @rigid = split(',', ($netstat->{rigid} || ""));
@@ -321,6 +375,7 @@ sub netstat_cgi {
 	my $u = "";
 	my $width;
 	my $height;
+	my @extra;
 	my @riglim;
 	my @tmp;
 	my @tmpz;
@@ -334,6 +389,9 @@ sub netstat_cgi {
 	my $IMG_DIR = $config->{base_dir} . "/" . $config->{imgs_dir};
 	my $imgfmt_uc = uc($config->{image_format});
 	my $imgfmt_lc = lc($config->{image_format});
+	foreach my $i (split(',', $config->{rrdtool_extra_options} || "")) {
+		push(@extra, trim($i)) if trim($i);
+	}
 
 	$title = !$silent ? $title : "";
 
@@ -342,20 +400,20 @@ sub netstat_cgi {
 	#
 	if(lc($config->{iface_mode}) eq "text") {
 		if($title) {
-			main::graph_header($title, 2);
-			print("    <tr>\n");
-			print("    <td bgcolor='$colors->{title_bg_color}'>\n");
+			push(@output, main::graph_header($title, 2));
+			push(@output, "    <tr>\n");
+			push(@output, "    <td bgcolor='$colors->{title_bg_color}'>\n");
 		}
 		my (undef, undef, undef, $data) = RRDs::fetch("$rrd",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
 			"AVERAGE",
 			"-r $tf->{res}");
 		$err = RRDs::error;
-		print("ERROR: while fetching $rrd: $err\n") if $err;
-		print("    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
-		print("                                                                                            IPv4                                                                                        IPv6\n");
-		print("Time  CLOSED LISTEN SYNSEN SYNREC ESTBLS FINWA1 FINWA2 CLOSIN TIMEWA CLOSEW LASTAC UNKNOW    UDP  CLOSED LISTEN SYNSEN SYNREC ESTBLS FINWA1 FINWA2 CLOSIN TIMEWA CLOSEW LASTAC UNKNOW    UDP\n");
-		print("-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- \n");
+		push(@output, "ERROR: while fetching $rrd: $err\n") if $err;
+		push(@output, "    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
+		push(@output, "                                                                                            IPv4                                                                                        IPv6\n");
+		push(@output, "Time  CLOSED LISTEN SYNSEN SYNREC ESTBLS FINWA1 FINWA2 CLOSIN TIMEWA CLOSEW LASTAC UNKNOW    UDP  CLOSED LISTEN SYNSEN SYNREC ESTBLS FINWA1 FINWA2 CLOSIN TIMEWA CLOSEW LASTAC UNKNOW    UDP\n");
+		push(@output, "-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- \n");
 		my $line;
 		my @row;
 		my $time;
@@ -364,16 +422,16 @@ sub netstat_cgi {
 			$time = $time - (1 / $tf->{ts});
 			my ($i4_closed, $i4_listen, $i4_synsent, $i4_syncrecv, $i4_estblshd, $i4_finwait1, $i4_finwait2, $i4_closing, $i4_timewait, $i4_closewait, $i4_lastack, $i4_unknown, $i4_udp, $i6_closed, $i6_listen, $i6_synsent, $i6_syncrecv, $i6_estblshd, $i6_finwait1, $i6_finwait2, $i6_closing, $i6_timewait, $i6_closewait, $i6_lastack, $i6_unknown, $i6_udp) = @$line;
 			@row = ($i4_closed || 0, $i4_listen || 0, $i4_synsent || 0, $i4_syncrecv || 0, $i4_estblshd || 0, $i4_finwait1 || 0, $i4_finwait2 || 0, $i4_closing || 0, $i4_timewait || 0, $i4_closewait || 0, $i4_lastack || 0, $i4_unknown || 0, $i4_udp || 0, $i6_closed || 0, $i6_listen || 0, $i6_synsent || 0, $i6_syncrecv || 0, $i6_estblshd || 0, $i6_finwait1 || 0, $i6_finwait2 || 0, $i6_closing || 0, $i6_timewait || 0, $i6_closewait || 0, $i6_lastack || 0, $i6_unknown || 0, $i6_udp || 0);
-			printf(" %2d$tf->{tc}  %6d %6d %6d %6d %6d %6d %6d %6d %6d %6d %6d %6d %6d  %6d %6d %6d %6d %6d %6d %6d %6d %6d %6d %6d %6d %6d\n", $time, @row);
+			push(@output, sprintf(" %2d$tf->{tc}  %6d %6d %6d %6d %6d %6d %6d %6d %6d %6d %6d %6d %6d  %6d %6d %6d %6d %6d %6d %6d %6d %6d %6d %6d %6d %6d\n", $time, @row));
 		}
-		print("    </pre>\n");
+		push(@output, "    </pre>\n");
 		if($title) {
-			print("    </td>\n");
-			print("    </tr>\n");
-			main::graph_footer();
+			push(@output, "    </td>\n");
+			push(@output, "    </tr>\n");
+			push(@output, main::graph_footer());
 		}
-		print("  <br>\n");
-		return;
+		push(@output, "  <br>\n");
+		return @output;
 	}
 
 
@@ -412,9 +470,9 @@ sub netstat_cgi {
 	}
 
 	if($title) {
-		main::graph_header($title, 2);
-		print("    <tr>\n");
-		print("    <td bgcolor='$colors->{title_bg_color}'>\n");
+		push(@output, main::graph_header($title, 2));
+		push(@output, "    <tr>\n");
+		push(@output, "    <td bgcolor='$colors->{title_bg_color}'>\n");
 	}
 
 	@riglim = @{setup_riglim($rigid[0], $limit[0])};
@@ -478,6 +536,7 @@ sub netstat_cgi {
 		"--vertical-label=Connections",
 		"--width=$width",
 		"--height=$height",
+		@extra,
 		@riglim,
 		$zoom,
 		@{$cgi->{version12}},
@@ -493,7 +552,7 @@ sub netstat_cgi {
 		@CDEF,
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $IMG_DIR" . "$IMG1: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG1: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
 		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG1z",
@@ -503,6 +562,7 @@ sub netstat_cgi {
 			"--vertical-label=Connections",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -518,12 +578,12 @@ sub netstat_cgi {
 			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG1z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG1z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /netstat1/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "' border='0'></a>\n");
 			} else {
 				if($version eq "new") {
 					$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -532,10 +592,10 @@ sub netstat_cgi {
 					$picz_width = $width + 115;
 					$picz_height = $height + 100;
 				}
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "'>\n");
 		}
 	}
 
@@ -603,6 +663,7 @@ sub netstat_cgi {
 		"--vertical-label=Connections",
 		"--width=$width",
 		"--height=$height",
+		@extra,
 		@riglim,
 		$zoom,
 		@{$cgi->{version12}},
@@ -618,7 +679,7 @@ sub netstat_cgi {
 		@CDEF,
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $IMG_DIR" . "$IMG2: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG2: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
 		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG2z",
@@ -628,6 +689,7 @@ sub netstat_cgi {
 			"--vertical-label=Connections",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -643,12 +705,12 @@ sub netstat_cgi {
 			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG2z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG2z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /netstat2/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "' border='0'></a>\n");
 			} else {
 				if($version eq "new") {
 					$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -657,16 +719,16 @@ sub netstat_cgi {
 					$picz_width = $width + 115;
 					$picz_height = $height + 100;
 				}
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "'>\n");
 		}
 	}
 
 	if($title) {
-		print("    </td>\n");
-		print("    <td valign='top' bgcolor='" . $colors->{title_bg_color} . "'>\n");
+		push(@output, "    </td>\n");
+		push(@output, "    <td valign='top' bgcolor='" . $colors->{title_bg_color} . "'>\n");
 	}
 
 	@riglim = @{setup_riglim($rigid[2], $limit[2])};
@@ -707,6 +769,7 @@ sub netstat_cgi {
 		"--vertical-label=Connections",
 		"--width=$width",
 		"--height=$height",
+		@extra,
 		@riglim,
 		$zoom,
 		@{$cgi->{version12}},
@@ -721,7 +784,7 @@ sub netstat_cgi {
 		"COMMENT: \\n",
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $IMG_DIR" . "$IMG3: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG3: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
 		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG3z",
@@ -731,6 +794,7 @@ sub netstat_cgi {
 			"--vertical-label=Connections",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -744,12 +808,12 @@ sub netstat_cgi {
 			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG3z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG3z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /netstat3/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "' border='0'></a>\n");
 			} else {
 				if($version eq "new") {
 					$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -758,10 +822,10 @@ sub netstat_cgi {
 					$picz_width = $width + 115;
 					$picz_height = $height + 100;
 				}
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "'>\n");
 		}
 	}
 
@@ -810,6 +874,7 @@ sub netstat_cgi {
 		"--vertical-label=Connections",
 		"--width=$width",
 		"--height=$height",
+		@extra,
 		@riglim,
 		$zoom,
 		@{$cgi->{version12}},
@@ -826,7 +891,7 @@ sub netstat_cgi {
 		"COMMENT: \\n",
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $IMG_DIR" . "$IMG4: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG4: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
 		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG4z",
@@ -836,6 +901,7 @@ sub netstat_cgi {
 			"--vertical-label=Connections",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -851,12 +917,12 @@ sub netstat_cgi {
 			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG4z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG4z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /netstat4/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4 . "' border='0'></a>\n");
 			} else {
 				if($version eq "new") {
 					$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -865,10 +931,10 @@ sub netstat_cgi {
 					$picz_width = $width + 115;
 					$picz_height = $height + 100;
 				}
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4 . "'>\n");
 		}
 	}
 
@@ -903,6 +969,7 @@ sub netstat_cgi {
 		"--vertical-label=Listen",
 		"--width=$width",
 		"--height=$height",
+		@extra,
 		@riglim,
 		$zoom,
 		@{$cgi->{version12}},
@@ -915,7 +982,7 @@ sub netstat_cgi {
 		"COMMENT: \\n",
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $IMG_DIR" . "$IMG5: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG5: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
 		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG5z",
@@ -925,6 +992,7 @@ sub netstat_cgi {
 			"--vertical-label=Listen",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -936,12 +1004,12 @@ sub netstat_cgi {
 			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG5z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG5z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /netstat5/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5 . "' border='0'></a>\n");
 			} else {
 				if($version eq "new") {
 					$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -950,20 +1018,20 @@ sub netstat_cgi {
 					$picz_width = $width + 115;
 					$picz_height = $height + 100;
 				}
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5 . "'>\n");
 		}
 	}
 
 	if($title) {
-		print("    </td>\n");
-		print("    </tr>\n");
-		main::graph_footer();
+		push(@output, "    </td>\n");
+		push(@output, "    </tr>\n");
+		push(@output, main::graph_footer());
 	}
-	print("  <br>\n");
-	return;
+	push(@output, "  <br>\n");
+	return @output;
 }
 
 1;

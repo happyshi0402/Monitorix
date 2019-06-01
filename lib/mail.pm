@@ -1,7 +1,7 @@
 #
 # Monitorix - A lightweight system monitoring tool.
 #
-# Copyright (C) 2005-2016 by Jordi Sanfeliu <jordi@fibranet.cat>
+# Copyright (C) 2005-2019 by Jordi Sanfeliu <jordi@fibranet.cat>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -138,6 +138,9 @@ sub mail_init {
 			logger("$myself: ERROR: script '$mail->{alerts}->{mqueued_script}' doesn't exist or don't has execution permissions.");
 		}
 	}
+	if(!$mail->{stats_rate}) {
+		$mail->{stats_rate} = "per_second";
+	}
 
 	# Since 3.6.0 all DS changed from COUNTER to GAUGE
 	RRDs::tune($rrd,
@@ -181,15 +184,17 @@ sub mail_update {
 	my $spf_softfail;
 	my $spf_fail;
 	my $rbl;
-	my $gl_records;
+	my $gl_records;		# means 'passed' in Postgrey
 	my $gl_greylisted;
 	my $gl_whitelisted;
+	my $gl_delayed;		# specific for Postgrey
 	my @mta = (0) x 15;
 	my @gen = (0) x 10;
 	my @mta_h = (0) x 15;
 	my @gen_h = (0) x 10;
 
 	my $n;
+	my $first_read;
 	my $mail_log_seekpos;
 	my $mail_log_size = 0;
 	my $sa_log_seekpos;
@@ -203,6 +208,7 @@ sub mail_update {
 	$mail_log_seekpos = defined($mail_log_seekpos) ? int($mail_log_seekpos) : 0;
 	$sa_log_seekpos = defined($sa_log_seekpos) ? int($sa_log_seekpos) : 0;
 	$clamav_log_seekpos = defined($clamav_log_seekpos) ? int($clamav_log_seekpos) : 0;
+	$first_read = $mail_log_seekpos ? 0 : 1;
 
 	$recvd = $delvd = $bytes_recvd = $bytes_delvd = 0;
 	$in_conn = $out_conn = $rejtd = 0;
@@ -316,9 +322,48 @@ sub mail_update {
 			}
 			close(IN);
 		}
+	} elsif(lc($mail->{mta}) eq "exim") {
+		if(open(IN, "eximstats -h0 -ne -nr -t0 $config->{mail_log} |")) {
+			while(<IN>) {
+				if(/^  Received\s+(\d+)(\S\S)\s+(\d+).*?$/) {
+					$bytes_recvd = $1;
+					$bytes_recvd = $1 * 1024 if $2 eq "KB";
+					$bytes_recvd = $1 * 1024 * 1024 if $2 eq "MB";
+					$recvd = $3;
+				}
+				if(/^  Delivered\s+(\d+)(\S\S)\s+(\d+).*?$/) {
+					$bytes_delvd = $1;
+					$bytes_delvd = $1 * 1024 if $2 eq "KB";
+					$bytes_delvd = $1 * 1024 * 1024 if $2 eq "MB";
+					$delvd = $3;
+				}
+				if(/^  Rejects\s+(\d+).*?$/) {
+					$rejtd = $1;
+				}
+				if(/^  remote_smtp\s+\d+\S*\s+(\d+)$/) {
+					$out_conn = $1;
+				}
+			}
+			close(IN);
+			$in_conn = $recvd - $rejtd;
+			$delvd -= $out_conn;
+		}
+		if(open(IN, "exim -bp |")) {
+			while(<IN>) {
+				# discard blank lines and lines with recipients
+				if(!/^$/ && !/^\s{10}\S+$/) {
+					my ($size, undef, $unit) = ($_ =~ m/^\s*\d+.\s+(\d(.\d)?)(\S*)\s.*?$/);
+					$queues += int($size) if !$unit;
+					$queues += int($size * 1024) if $unit eq "K";
+					$queues += int($size * 1024 * 1024) if $unit eq "M";
+					$queued++;
+				}  
+			}
+			close(IN);
+		}
 	}
 
-	$gl_records = $gl_greylisted = $gl_whitelisted = 0;
+	$gl_records = $gl_greylisted = $gl_whitelisted = $gl_delayed = 0;
 	if(lc($mail->{greylist}) eq "milter-greylist") {
 		if(-r $config->{milter_gl}) {
 			open(IN, $config->{milter_gl});
@@ -398,7 +443,28 @@ sub mail_update {
 				}
 				# postfix RBL
 				if(/ postfix\/smtpd\[\d+\]: NOQUEUE: reject: RCPT from /) {
+					# postgrey
+					if(lc($mail->{greylist}) eq "postgrey") {
+						if(/ Recipient address rejected: Greylisted, /) {
+							next;	# ignored
+						}
+					}
 					$rbl++;
+				}
+				# postgrey
+				if(lc($mail->{greylist}) eq "postgrey") {
+					if(/ action=greylist, reason=new, /) {
+						$gl_greylisted++;
+					}
+					if(/ action=greylist, reason=early-retry /) {
+						$gl_delayed++;
+					}
+					if(/ action=pass, reason=triplet found, /) {
+						$gl_records++;
+					}
+					if(/ action=pass, reason=client (whitelist|AWL), /) {
+						$gl_whitelisted++;
+					}
 				}
 			}
 		}
@@ -453,52 +519,55 @@ sub mail_update {
 
 	$mta[0] = int($in_conn) - ($mta_h[0] || 0);
 	$mta[0] = 0 unless $mta[0] != int($in_conn);
-	$mta[0] /= 60;
+	$mta[0] /= 60 if lc($mail->{stats_rate}) eq "per_second";
 	$mta_h[0] = int($in_conn);
 
 	$mta[1] = int($out_conn) - ($mta_h[1] || 0);
 	$mta[1] = 0 unless $mta[1] != int($out_conn);
-	$mta[1] /= 60;
+	$mta[1] /= 60 if lc($mail->{stats_rate}) eq "per_second";
 	$mta_h[1] = int($out_conn);
 
 	$mta[2] = int($recvd) - ($mta_h[2] || 0);
 	$mta[2] = 0 unless $mta[2] != int($recvd);
-	$mta[2] /= 60;
+	$mta[2] /= 60 if lc($mail->{stats_rate}) eq "per_second";
 	$mta_h[2] = int($recvd);
 
 	$mta[3] = int($delvd) - ($mta_h[3] || 0);
 	$mta[3] = 0 unless $mta[3] != int($delvd);
-	$mta[3] /= 60;
+	$mta[3] /= 60 if lc($mail->{stats_rate}) eq "per_second";
 	$mta_h[3] = int($delvd);
 
 	$mta[4] = int($bytes_recvd) - ($mta_h[4] || 0);
 	$mta[4] = 0 unless $mta[4] != int($bytes_recvd);
-	$mta[4] /= 60;
+	$mta[4] /= 60 if lc($mail->{stats_rate}) eq "per_second";
 	$mta_h[4] = int($bytes_recvd);
 
 	$mta[5] = int($bytes_delvd) - ($mta_h[5] || 0);
 	$mta[5] = 0 unless $mta[5] != int($bytes_delvd);
-	$mta[5] /= 60;
+	$mta[5] /= 60 if lc($mail->{stats_rate}) eq "per_second";
 	$mta_h[5] = int($bytes_delvd);
 
 	$mta[6] = int($rejtd) - ($mta_h[6] || 0);
 	$mta[6] = 0 unless $mta[6] != int($rejtd);
-	$mta[6] /= 60;
+	$mta[6] /= 60 if lc($mail->{stats_rate}) eq "per_second";
 	$mta_h[6] = int($rejtd);
 
 	# avoid initial peak
-	$mta[7] = int($spam) unless !$mta_h[7];
-	$mta_h[7] = int($spam) unless $mta_h[7];
-	$mta[7] /= 60;
-
+	$mta_h[7] = 0;
+	if(!$first_read) {
+		$mta[7] = int($spam);
+		$mta[7] /= 60 if lc($mail->{stats_rate}) eq "per_second";
+	}
 	# avoid initial peak
-	$mta[8] = int($virus) unless !$mta_h[8];
-	$mta_h[8] = int($virus) unless $mta_h[8];
-	$mta[8] /= 60;
+	$mta_h[8] = 0;
+	if(!$first_read) {
+		$mta[8] = int($virus);
+		$mta[8] /= 60 if lc($mail->{stats_rate}) eq "per_second";
+	}
 
 	$mta[9] = int($bouncd) - ($mta_h[9] || 0);
 	$mta[9] = 0 unless $mta[9] != int($bouncd);
-	$mta[9] /= 60;
+	$mta[9] /= 60 if lc($mail->{stats_rate}) eq "per_second";
 	$mta_h[9] = int($bouncd);
 
 	$mta[10] = int($queued) || 0;
@@ -506,47 +575,83 @@ sub mail_update {
 
 	$mta[11] = int($discrd) - ($mta_h[11] || 0);
 	$mta[11] = 0 unless $mta[11] != int($discrd);
-	$mta[11] /= 60;
+	$mta[11] /= 60 if lc($mail->{stats_rate}) eq "per_second";
 	$mta_h[11] = int($discrd);
 
 	$mta[12] = int($held) - ($mta_h[12] || 0);
 	$mta[12] = 0 unless $mta[12] != int($held);
-	$mta[12] /= 60;
+	$mta[12] /= 60 if lc($mail->{stats_rate}) eq "per_second";
 	$mta_h[12] = int($held);
 
 	$mta[13] = int($forwrd) - ($mta_h[13] || 0);
 	$mta[13] = 0 unless $mta[13] != int($forwrd);
-	$mta[13] /= 60;
+	$mta[13] /= 60 if lc($mail->{stats_rate}) eq "per_second";
 	$mta_h[13] = int($forwrd);
 
 	$mta[14] = int($queues) || 0;
 	$mta_h[14] = 0;
 
 	# avoid initial peak
-	$gen[0] = int($spf_none) unless !$gen_h[0];
-	$gen_h[0] = int($spf_none) unless $gen_h[0];
-
+	$gen_h[0] = 0;
+	if(!$first_read) {
+		$gen[0] = int($spf_none);
+	}
 	# avoid initial peak
-	$gen[1] = int($spf_pass) unless !$gen_h[1];
-	$gen_h[1] = int($spf_pass) unless $gen_h[1];
-
+	$gen_h[1] = 0;
+	if(!$first_read) {
+		$gen[1] = int($spf_pass);
+	}
 	# avoid initial peak
-	$gen[2] = int($spf_softfail) unless !$gen_h[2];
-	$gen_h[2] = int($spf_softfail) unless $gen_h[2];
-
+	$gen_h[2] = 0;
+	if(!$first_read) {
+		$gen[2] = int($spf_softfail);
+	}
 	# avoid initial peak
-	$gen[3] = int($spf_fail) unless !$gen_h[3];
-	$gen_h[3] = int($spf_fail) unless $gen_h[3];
-
+	$gen_h[3] = 0;
+	if(!$first_read) {
+		$gen[3] = int($spf_fail);
+	}
 	# avoid initial peak
-	$gen[4] = int($rbl) unless !$gen_h[4];
-	$gen_h[4] = int($rbl) unless $gen_h[4];
+	$gen_h[4] = 0;
+	if(!$first_read) {
+		$gen[4] = int($rbl);
+		$gen[4] /= 60 if lc($mail->{stats_rate}) eq "per_second";
+	}
 
-	$gen_h[5] = $gen[5] = 0;
-	$gen_h[6] = $gen[6] = int($gl_records) || 0;
-	$gen_h[7] = $gen[7] = int($gl_greylisted) || 0;
-	$gen_h[8] = $gen[8] = int($gl_whitelisted) || 0;
-	$gen_h[9] = $gen[9] = 0;
+	if(lc($mail->{greylist}) eq "milter-greylist") {
+		$gen_h[5] = $gen[5] = 0;
+		$gen_h[6] = $gen[6] = int($gl_records) || 0;
+		$gen_h[7] = $gen[7] = int($gl_greylisted) || 0;
+		$gen_h[8] = $gen[8] = int($gl_whitelisted) || 0;
+		$gen_h[9] = $gen[9] = int($gl_delayed) || 0;
+	}
+	if(lc($mail->{greylist}) eq "postgrey") {
+		$gen_h[5] = $gen[5] = 0;
+		$gen_h[6] = $gen[6] = 0;
+		$gen_h[7] = $gen[7] = 0;
+		$gen_h[8] = $gen[8] = 0;
+		$gen_h[9] = $gen[9] = 0;
+		# avoid initial peak
+		if(!$first_read) {
+			$gen[6] = int($gl_records);
+			$gen[6] /= 60 if lc($mail->{stats_rate}) eq "per_second";
+		}
+		# avoid initial peak
+		if(!$first_read) {
+			$gen[7] = int($gl_greylisted);
+			$gen[7] /= 60 if lc($mail->{stats_rate}) eq "per_second";
+		}
+		# avoid initial peak
+		if(!$first_read) {
+			$gen[8] = int($gl_whitelisted);
+			$gen[8] /= 60 if lc($mail->{stats_rate}) eq "per_second";
+		}
+		# avoid initial peak
+		if(!$first_read) {
+			$gen[9] = int($gl_delayed);
+			$gen[9] /= 60 if lc($mail->{stats_rate}) eq "per_second";
+		}
+	}
 
 	$config->{mail_hist} = join(";", $mail_log_size, $sa_log_size, $clamav_log_size, @mta_h, @gen_h);
 	for($n = 0; $n < 15; $n++) {
@@ -558,7 +663,8 @@ sub mail_update {
 
 	# MAIL alert
 	if(lc($mail->{alerts}->{delvd_enabled}) eq "y") {
-		my $val = int($mta[3] * 60 + 0.5);
+		my $val = int($mta[3]);
+		$val *= 60 + 0.5 if lc($mail->{stats_rate}) eq "per_second";
 		if(!$mail->{alerts}->{delvd_threshold} || $val < $mail->{alerts}->{delvd_threshold}) {
 			$config->{mail_hist_alert1} = 0;
 		} else {
@@ -604,6 +710,7 @@ sub mail_update {
 
 sub mail_cgi {
 	my ($package, $config, $cgi) = @_;
+	my @output;
 
 	my $mail = $config->{mail};
 	my @rigid = split(',', ($mail->{rigid} || ""));
@@ -626,9 +733,13 @@ sub mail_cgi {
 	my $u = "";
 	my $width;
 	my $height;
+	my @extra;
 	my @riglim;
 	my $T = "B";
 	my $vlabel = "bytes/s";
+	my $rate_label = "Messages";
+	my $valform = "%5.0lf";
+	my $gl_valform = "%5.0lf";
 	my @tmp;
 	my @tmpz;
 	my @CDEF;
@@ -642,6 +753,9 @@ sub mail_cgi {
 	my $IMG_DIR = $config->{base_dir} . "/" . $config->{imgs_dir};
 	my $imgfmt_uc = uc($config->{image_format});
 	my $imgfmt_lc = lc($config->{image_format});
+	foreach my $i (split(',', $config->{rrdtool_extra_options} || "")) {
+		push(@extra, trim($i)) if trim($i);
+	}
 
 	$title = !$silent ? $title : "";
 
@@ -649,25 +763,33 @@ sub mail_cgi {
 		$T = "b";
 		$vlabel = "bits/s";
 	}
+	if(!$mail->{stats_rate}) {
+		$mail->{stats_rate} = "per_second";
+	}
+	if(lc($mail->{stats_rate}) eq "per_second") {
+		$rate_label = "Messages/s";
+		$valform = "%5.2lf";
+		$gl_valform = "%5.1lf";
+	}
 
 
 	# mode text
 	#
 	if(lc($config->{iface_mode}) eq "text") {
 		if($title) {
-			main::graph_header($title, 2);
-			print("    <tr>\n");
-			print("    <td bgcolor='$colors->{title_bg_color}'>\n");
+			push(@output, main::graph_header($title, 2));
+			push(@output, "    <tr>\n");
+			push(@output, "    <td bgcolor='$colors->{title_bg_color}'>\n");
 		}
 		my (undef, undef, undef, $data) = RRDs::fetch("$rrd",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
 			"AVERAGE",
 			"-r $tf->{res}");
 		$err = RRDs::error;
-		print("ERROR: while fetching $rrd: $err\n") if $err;
-		print("    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
-		print("Time  In.Conn Out.Conn  Receivd   Delivd  Bytes.R  Bytes.D  Rejectd  Bounced  Discard     Held  Forward     Spam    Virus   Queued  Queue.S\n");
-		print("------------------------------------------------------------------------------------------------------------------------------------------- \n");
+		push(@output, "ERROR: while fetching $rrd: $err\n") if $err;
+		push(@output, "    <pre style='font-size: 12px; color: $colors->{fg_color}';>\n");
+		push(@output, "Time  In.Conn Out.Conn  Receivd   Delivd  Bytes.R  Bytes.D  Rejectd  Bounced  Discard     Held  Forward     Spam    Virus   Queued  Queue.S\n");
+		push(@output, "------------------------------------------------------------------------------------------------------------------------------------------- \n");
 		my $line;
 		my @row;
 		my $time;
@@ -676,16 +798,16 @@ sub mail_cgi {
 			$time = $time - (1 / $tf->{ts});
 			my ($in, $out, $recvd, $delvd, $bytes_recvd, $bytes_delvd, $rejtd, $spam, $virus, $bouncd, $queued, $discrd, $held, $forwrd, $queues) = @$line;
 			@row = ($in, $out, $recvd, $delvd, $bytes_recvd, $bytes_delvd, $rejtd, $bouncd, $discrd, $held, $forwrd, $spam, $virus, $queued, $queues);
-			printf(" %2d$tf->{tc}  %7.2f  %7.2f  %7.2f  %7.2f  %7.2f  %7.2f  %7.2f  %7.2f  %7.2f  %7.2f  %7.2f  %7.2f  %7.2f  %7.2f  %7.2f\n", $time, @row);
+			push(@output, sprintf(" %2d$tf->{tc}  %7.2f  %7.2f  %7.2f  %7.2f  %7.2f  %7.2f  %7.2f  %7.2f  %7.2f  %7.2f  %7.2f  %7.2f  %7.2f  %7.2f  %7.2f\n", $time, @row));
 		}
-		print("    </pre>\n");
+		push(@output, "    </pre>\n");
 		if($title) {
-			print("    </td>\n");
-			print("    </tr>\n");
-			main::graph_footer();
+			push(@output, "    </td>\n");
+			push(@output, "    </tr>\n");
+			push(@output, main::graph_footer());
 		}
-		print("  <br>\n");
-		return;
+		push(@output, "  <br>\n");
+		return @output;
 	}
 
 
@@ -728,45 +850,45 @@ sub mail_cgi {
 	}
 
 	if($title) {
-		main::graph_header($title, 2);
+		push(@output, main::graph_header($title, 2));
 	}
 	@riglim = @{setup_riglim($rigid[0], $limit[0])};
 	if(lc($mail->{mta}) eq "sendmail") {
 		push(@tmp, "AREA:in#44EE44:In Connections");
-		push(@tmp, "GPRINT:in:LAST:    Cur\\: %5.2lf");
-		push(@tmp, "GPRINT:in:AVERAGE:    Avg\\: %5.2lf");
-		push(@tmp, "GPRINT:in:MIN:    Min\\: %5.2lf");
-		push(@tmp, "GPRINT:in:MAX:    Max\\: %5.2lf\\n");
+		push(@tmp, "GPRINT:in:LAST:    Cur\\: $valform");
+		push(@tmp, "GPRINT:in:AVERAGE:    Avg\\: $valform");
+		push(@tmp, "GPRINT:in:MIN:    Min\\: $valform");
+		push(@tmp, "GPRINT:in:MAX:    Max\\: $valform\\n");
 		push(@tmp, "AREA:rejtd#EE4444:Rejected");
-		push(@tmp, "GPRINT:rejtd:LAST:          Cur\\: %5.2lf");
-		push(@tmp, "GPRINT:rejtd:AVERAGE:    Avg\\: %5.2lf");
-		push(@tmp, "GPRINT:rejtd:MIN:    Min\\: %5.2lf");
-		push(@tmp, "GPRINT:rejtd:MAX:    Max\\: %5.2lf\\n");
+		push(@tmp, "GPRINT:rejtd:LAST:          Cur\\: $valform");
+		push(@tmp, "GPRINT:rejtd:AVERAGE:    Avg\\: $valform");
+		push(@tmp, "GPRINT:rejtd:MIN:    Min\\: $valform");
+		push(@tmp, "GPRINT:rejtd:MAX:    Max\\: $valform\\n");
 		push(@tmp, "AREA:recvd#448844:Received");
-		push(@tmp, "GPRINT:recvd:LAST:          Cur\\: %5.2lf");
-		push(@tmp, "GPRINT:recvd:AVERAGE:    Avg\\: %5.2lf");
-		push(@tmp, "GPRINT:recvd:MIN:    Min\\: %5.2lf");
-		push(@tmp, "GPRINT:recvd:MAX:    Max\\: %5.2lf\\n");
+		push(@tmp, "GPRINT:recvd:LAST:          Cur\\: $valform");
+		push(@tmp, "GPRINT:recvd:AVERAGE:    Avg\\: $valform");
+		push(@tmp, "GPRINT:recvd:MIN:    Min\\: $valform");
+		push(@tmp, "GPRINT:recvd:MAX:    Max\\: $valform\\n");
 		push(@tmp, "AREA:spam#EEEE44:Spam");
-		push(@tmp, "GPRINT:spam:LAST:              Cur\\: %5.2lf");
-		push(@tmp, "GPRINT:spam:AVERAGE:    Avg\\: %5.2lf");
-		push(@tmp, "GPRINT:spam:MIN:    Min\\: %5.2lf");
-		push(@tmp, "GPRINT:spam:MAX:    Max\\: %5.2lf\\n");
+		push(@tmp, "GPRINT:spam:LAST:              Cur\\: $valform");
+		push(@tmp, "GPRINT:spam:AVERAGE:    Avg\\: $valform");
+		push(@tmp, "GPRINT:spam:MIN:    Min\\: $valform");
+		push(@tmp, "GPRINT:spam:MAX:    Max\\: $valform\\n");
 		push(@tmp, "AREA:virus#EE44EE:Virus");
-		push(@tmp, "GPRINT:virus:LAST:             Cur\\: %5.2lf");
-		push(@tmp, "GPRINT:virus:AVERAGE:    Avg\\: %5.2lf");
-		push(@tmp, "GPRINT:virus:MIN:    Min\\: %5.2lf");
-		push(@tmp, "GPRINT:virus:MAX:    Max\\: %5.2lf\\n");
+		push(@tmp, "GPRINT:virus:LAST:             Cur\\: $valform");
+		push(@tmp, "GPRINT:virus:AVERAGE:    Avg\\: $valform");
+		push(@tmp, "GPRINT:virus:MIN:    Min\\: $valform");
+		push(@tmp, "GPRINT:virus:MAX:    Max\\: $valform\\n");
 		push(@tmp, "AREA:n_delvd#4444EE:Delivered");
-		push(@tmp, "GPRINT:delvd:LAST:         Cur\\: %5.2lf");
-		push(@tmp, "GPRINT:delvd:AVERAGE:    Avg\\: %5.2lf");
-		push(@tmp, "GPRINT:delvd:MIN:    Min\\: %5.2lf");
-		push(@tmp, "GPRINT:delvd:MAX:    Max\\: %5.2lf\\n");
+		push(@tmp, "GPRINT:delvd:LAST:         Cur\\: $valform");
+		push(@tmp, "GPRINT:delvd:AVERAGE:    Avg\\: $valform");
+		push(@tmp, "GPRINT:delvd:MIN:    Min\\: $valform");
+		push(@tmp, "GPRINT:delvd:MAX:    Max\\: $valform\\n");
 		push(@tmp, "AREA:n_out#44EEEE:Out Connections");
-		push(@tmp, "GPRINT:out:LAST:   Cur\\: %5.2lf");
-		push(@tmp, "GPRINT:out:AVERAGE:    Avg\\: %5.2lf");
-		push(@tmp, "GPRINT:out:MIN:    Min\\: %5.2lf");
-		push(@tmp, "GPRINT:out:MAX:    Max\\: %5.2lf\\n");
+		push(@tmp, "GPRINT:out:LAST:   Cur\\: $valform");
+		push(@tmp, "GPRINT:out:AVERAGE:    Avg\\: $valform");
+		push(@tmp, "GPRINT:out:MIN:    Min\\: $valform");
+		push(@tmp, "GPRINT:out:MAX:    Max\\: $valform\\n");
 		push(@tmp, "LINE1:in#00EE00");
 		push(@tmp, "LINE1:rejtd#EE0000");
 		push(@tmp, "LINE1:recvd#1F881F");
@@ -794,55 +916,55 @@ sub mail_cgi {
 		push(@tmpz, "LINE1:n_out#00EEEE");
 	} elsif(lc($mail->{mta}) eq "postfix") {
 		push(@tmp, "AREA:rejtd#EE4444:Rejected");
-		push(@tmp, "GPRINT:rejtd:LAST:          Cur\\: %5.2lf");
-		push(@tmp, "GPRINT:rejtd:AVERAGE:    Avg\\: %5.2lf");
-		push(@tmp, "GPRINT:rejtd:MIN:    Min\\: %5.2lf");
-		push(@tmp, "GPRINT:rejtd:MAX:    Max\\: %5.2lf\\n");
+		push(@tmp, "GPRINT:rejtd:LAST:          Cur\\: $valform");
+		push(@tmp, "GPRINT:rejtd:AVERAGE:    Avg\\: $valform");
+		push(@tmp, "GPRINT:rejtd:MIN:    Min\\: $valform");
+		push(@tmp, "GPRINT:rejtd:MAX:    Max\\: $valform\\n");
 		push(@tmp, "AREA:rbl#963C74:Rejected (RBL)");
-		push(@tmp, "GPRINT:rbl:LAST:    Cur\\: %5.2lf");
-		push(@tmp, "GPRINT:rbl:AVERAGE:    Avg\\: %5.2lf");
-		push(@tmp, "GPRINT:rbl:MIN:    Min\\: %5.2lf");
-		push(@tmp, "GPRINT:rbl:MAX:    Max\\: %5.2lf\\n");
+		push(@tmp, "GPRINT:rbl:LAST:    Cur\\: $valform");
+		push(@tmp, "GPRINT:rbl:AVERAGE:    Avg\\: $valform");
+		push(@tmp, "GPRINT:rbl:MIN:    Min\\: $valform");
+		push(@tmp, "GPRINT:rbl:MAX:    Max\\: $valform\\n");
 		push(@tmp, "AREA:recvd#448844:Received");
-		push(@tmp, "GPRINT:recvd:LAST:          Cur\\: %5.2lf");
-		push(@tmp, "GPRINT:recvd:AVERAGE:    Avg\\: %5.2lf");
-		push(@tmp, "GPRINT:recvd:MIN:    Min\\: %5.2lf");
-		push(@tmp, "GPRINT:recvd:MAX:    Max\\: %5.2lf\\n");
+		push(@tmp, "GPRINT:recvd:LAST:          Cur\\: $valform");
+		push(@tmp, "GPRINT:recvd:AVERAGE:    Avg\\: $valform");
+		push(@tmp, "GPRINT:recvd:MIN:    Min\\: $valform");
+		push(@tmp, "GPRINT:recvd:MAX:    Max\\: $valform\\n");
 		push(@tmp, "AREA:spam#EEEE44:Spam");
-		push(@tmp, "GPRINT:spam:LAST:              Cur\\: %5.2lf");
-		push(@tmp, "GPRINT:spam:AVERAGE:    Avg\\: %5.2lf");
-		push(@tmp, "GPRINT:spam:MIN:    Min\\: %5.2lf");
-		push(@tmp, "GPRINT:spam:MAX:    Max\\: %5.2lf\\n");
+		push(@tmp, "GPRINT:spam:LAST:              Cur\\: $valform");
+		push(@tmp, "GPRINT:spam:AVERAGE:    Avg\\: $valform");
+		push(@tmp, "GPRINT:spam:MIN:    Min\\: $valform");
+		push(@tmp, "GPRINT:spam:MAX:    Max\\: $valform\\n");
 		push(@tmp, "AREA:virus#EE44EE:Virus");
-		push(@tmp, "GPRINT:virus:LAST:             Cur\\: %5.2lf");
-		push(@tmp, "GPRINT:virus:AVERAGE:    Avg\\: %5.2lf");
-		push(@tmp, "GPRINT:virus:MIN:    Min\\: %5.2lf");
-		push(@tmp, "GPRINT:virus:MAX:    Max\\: %5.2lf\\n");
+		push(@tmp, "GPRINT:virus:LAST:             Cur\\: $valform");
+		push(@tmp, "GPRINT:virus:AVERAGE:    Avg\\: $valform");
+		push(@tmp, "GPRINT:virus:MIN:    Min\\: $valform");
+		push(@tmp, "GPRINT:virus:MAX:    Max\\: $valform\\n");
 		push(@tmp, "AREA:bouncd#FFA500:Bounced");
-		push(@tmp, "GPRINT:bouncd:LAST:           Cur\\: %5.2lf");
-		push(@tmp, "GPRINT:bouncd:AVERAGE:    Avg\\: %5.2lf");
-		push(@tmp, "GPRINT:bouncd:MIN:    Min\\: %5.2lf");
-		push(@tmp, "GPRINT:bouncd:MAX:    Max\\: %5.2lf\\n");
+		push(@tmp, "GPRINT:bouncd:LAST:           Cur\\: $valform");
+		push(@tmp, "GPRINT:bouncd:AVERAGE:    Avg\\: $valform");
+		push(@tmp, "GPRINT:bouncd:MIN:    Min\\: $valform");
+		push(@tmp, "GPRINT:bouncd:MAX:    Max\\: $valform\\n");
 		push(@tmp, "AREA:discrd#CCCCCC:Discarded");
-		push(@tmp, "GPRINT:discrd:LAST:         Cur\\: %5.2lf");
-		push(@tmp, "GPRINT:discrd:AVERAGE:    Avg\\: %5.2lf");
-		push(@tmp, "GPRINT:discrd:MIN:    Min\\: %5.2lf");
-		push(@tmp, "GPRINT:discrd:MAX:    Max\\: %5.2lf\\n");
+		push(@tmp, "GPRINT:discrd:LAST:         Cur\\: $valform");
+		push(@tmp, "GPRINT:discrd:AVERAGE:    Avg\\: $valform");
+		push(@tmp, "GPRINT:discrd:MIN:    Min\\: $valform");
+		push(@tmp, "GPRINT:discrd:MAX:    Max\\: $valform\\n");
 		push(@tmp, "AREA:held#44EE44:Held");
-		push(@tmp, "GPRINT:held:LAST:              Cur\\: %5.2lf");
-		push(@tmp, "GPRINT:held:AVERAGE:    Avg\\: %5.2lf");
-		push(@tmp, "GPRINT:held:MIN:    Min\\: %5.2lf");
-		push(@tmp, "GPRINT:held:MAX:    Max\\: %5.2lf\\n");
+		push(@tmp, "GPRINT:held:LAST:              Cur\\: $valform");
+		push(@tmp, "GPRINT:held:AVERAGE:    Avg\\: $valform");
+		push(@tmp, "GPRINT:held:MIN:    Min\\: $valform");
+		push(@tmp, "GPRINT:held:MAX:    Max\\: $valform\\n");
 		push(@tmp, "AREA:n_forwrd#44EEEE:Forwarded");
-		push(@tmp, "GPRINT:forwrd:LAST:         Cur\\: %5.2lf");
-		push(@tmp, "GPRINT:forwrd:AVERAGE:    Avg\\: %5.2lf");
-		push(@tmp, "GPRINT:forwrd:MIN:    Min\\: %5.2lf");
-		push(@tmp, "GPRINT:forwrd:MAX:    Max\\: %5.2lf\\n");
+		push(@tmp, "GPRINT:forwrd:LAST:         Cur\\: $valform");
+		push(@tmp, "GPRINT:forwrd:AVERAGE:    Avg\\: $valform");
+		push(@tmp, "GPRINT:forwrd:MIN:    Min\\: $valform");
+		push(@tmp, "GPRINT:forwrd:MAX:    Max\\: $valform\\n");
 		push(@tmp, "AREA:n_delvd#4444EE:Delivered");
-		push(@tmp, "GPRINT:delvd:LAST:         Cur\\: %5.2lf");
-		push(@tmp, "GPRINT:delvd:AVERAGE:    Avg\\: %5.2lf");
-		push(@tmp, "GPRINT:delvd:MIN:    Min\\: %5.2lf");
-		push(@tmp, "GPRINT:delvd:MAX:    Max\\: %5.2lf\\n");
+		push(@tmp, "GPRINT:delvd:LAST:         Cur\\: $valform");
+		push(@tmp, "GPRINT:delvd:AVERAGE:    Avg\\: $valform");
+		push(@tmp, "GPRINT:delvd:MIN:    Min\\: $valform");
+		push(@tmp, "GPRINT:delvd:MAX:    Max\\: $valform\\n");
 		push(@tmp, "LINE1:rejtd#EE0000");
 		push(@tmp, "LINE1:rbl#963C74");
 		push(@tmp, "LINE1:recvd#1F881F");
@@ -874,6 +996,67 @@ sub mail_cgi {
 		push(@tmpz, "LINE1:held#00EE00");
 		push(@tmpz, "LINE1:n_forwrd#00EEEE");
 		push(@tmpz, "LINE1:n_delvd#0000EE");
+	} elsif(lc($mail->{mta}) eq "exim") {
+		push(@tmp, "AREA:in#44EE44:In Connections");
+		push(@tmp, "GPRINT:in:LAST:    Cur\\: $valform");
+		push(@tmp, "GPRINT:in:AVERAGE:    Avg\\: $valform");
+		push(@tmp, "GPRINT:in:MIN:    Min\\: $valform");
+		push(@tmp, "GPRINT:in:MAX:    Max\\: $valform\\n");
+		push(@tmp, "AREA:rejtd#EE4444:Rejected");
+		push(@tmp, "GPRINT:rejtd:LAST:          Cur\\: $valform");
+		push(@tmp, "GPRINT:rejtd:AVERAGE:    Avg\\: $valform");
+		push(@tmp, "GPRINT:rejtd:MIN:    Min\\: $valform");
+		push(@tmp, "GPRINT:rejtd:MAX:    Max\\: $valform\\n");
+		push(@tmp, "AREA:recvd#448844:Received");
+		push(@tmp, "GPRINT:recvd:LAST:          Cur\\: $valform");
+		push(@tmp, "GPRINT:recvd:AVERAGE:    Avg\\: $valform");
+		push(@tmp, "GPRINT:recvd:MIN:    Min\\: $valform");
+		push(@tmp, "GPRINT:recvd:MAX:    Max\\: $valform\\n");
+		push(@tmp, "AREA:spam#EEEE44:Spam");
+		push(@tmp, "GPRINT:spam:LAST:              Cur\\: $valform");
+		push(@tmp, "GPRINT:spam:AVERAGE:    Avg\\: $valform");
+		push(@tmp, "GPRINT:spam:MIN:    Min\\: $valform");
+		push(@tmp, "GPRINT:spam:MAX:    Max\\: $valform\\n");
+		push(@tmp, "AREA:virus#EE44EE:Virus");
+		push(@tmp, "GPRINT:virus:LAST:             Cur\\: $valform");
+		push(@tmp, "GPRINT:virus:AVERAGE:    Avg\\: $valform");
+		push(@tmp, "GPRINT:virus:MIN:    Min\\: $valform");
+		push(@tmp, "GPRINT:virus:MAX:    Max\\: $valform\\n");
+		push(@tmp, "AREA:n_delvd#4444EE:Delivered");
+		push(@tmp, "GPRINT:delvd:LAST:         Cur\\: $valform");
+		push(@tmp, "GPRINT:delvd:AVERAGE:    Avg\\: $valform");
+		push(@tmp, "GPRINT:delvd:MIN:    Min\\: $valform");
+		push(@tmp, "GPRINT:delvd:MAX:    Max\\: $valform\\n");
+		push(@tmp, "AREA:n_out#44EEEE:Out Connections");
+		push(@tmp, "GPRINT:out:LAST:   Cur\\: $valform");
+		push(@tmp, "GPRINT:out:AVERAGE:    Avg\\: $valform");
+		push(@tmp, "GPRINT:out:MIN:    Min\\: $valform");
+		push(@tmp, "GPRINT:out:MAX:    Max\\: $valform\\n");
+		push(@tmp, "LINE1:in#00EE00");
+		push(@tmp, "LINE1:rejtd#EE0000");
+		push(@tmp, "LINE1:recvd#1F881F");
+		push(@tmp, "LINE1:spam#EEEE00");
+		push(@tmp, "LINE1:virus#EE00EE");
+		push(@tmp, "LINE1:n_delvd#0000EE");
+		push(@tmp, "LINE1:n_out#00EEEE");
+		push(@tmp, "COMMENT: \\n");
+		push(@tmp, "COMMENT: \\n");
+		push(@tmp, "COMMENT: \\n");
+
+		push(@tmpz, "AREA:in#44EE44:In Connections");
+		push(@tmpz, "AREA:rejtd#EE4444:Rejected");
+		push(@tmpz, "AREA:recvd#448844:Received");
+		push(@tmpz, "AREA:spam#EEEE44:Spam");
+		push(@tmpz, "AREA:virus#EE44EE:Virus");
+		push(@tmpz, "AREA:n_delvd#4444EE:Delivered");
+		push(@tmpz, "AREA:n_out#44EEEE:Out Connections");
+		push(@tmpz, "LINE1:in#00EE00");
+		push(@tmpz, "LINE1:rejtd#EE0000");
+		push(@tmpz, "LINE1:recvd#1F881F");
+		push(@tmpz, "LINE1:spam#EEEE00");
+		push(@tmpz, "LINE1:virus#EE00EE");
+		push(@tmpz, "LINE1:n_delvd#0000EE");
+		push(@tmpz, "LINE1:n_out#00EEEE");
 	}
 	if(lc($config->{show_gaps}) eq "y") {
 		push(@tmp, "AREA:wrongdata_p#$colors->{gap}:");
@@ -885,8 +1068,8 @@ sub mail_cgi {
 	}
 
 	if($title) {
-		print("    <tr>\n");
-		print("    <td bgcolor='$colors->{title_bg_color}'>\n");
+		push(@output, "    <tr>\n");
+		push(@output, "    <td bgcolor='$colors->{title_bg_color}'>\n");
 	}
 	($width, $height) = split('x', $config->{graph_size}->{main});
 	if($silent =~ /imagetag/) {
@@ -900,9 +1083,10 @@ sub mail_cgi {
 		"--title=$config->{graphs}->{_mail1}  ($tf->{nwhen}$tf->{twhen})",
 		"--start=-$tf->{nwhen}$tf->{twhen}",
 		"--imgformat=$imgfmt_uc",
-		"--vertical-label=Messages/s",
+		"--vertical-label=$rate_label",
 		"--width=$width",
 		"--height=$height",
+		@extra,
 		@riglim,
 		$zoom,
 		@{$cgi->{version12}},
@@ -928,16 +1112,17 @@ sub mail_cgi {
 		"COMMENT: \\n",
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $IMG_DIR" . "$IMG1: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG1: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
 		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG1z",
 			"--title=$config->{graphs}->{_mail1}  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
 			"--imgformat=$imgfmt_uc",
-			"--vertical-label=Messages/s",
+			"--vertical-label=$rate_label",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -962,12 +1147,12 @@ sub mail_cgi {
 			"CDEF:n_out=out,-1,*",
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG1z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG1z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /mail1/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "' border='0'></a>\n");
 			} else {
 				if($version eq "new") {
 					$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -976,10 +1161,10 @@ sub mail_cgi {
 					$picz_width = $width + 115;
 					$picz_height = $height + 100;
 				}
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG1 . "'>\n");
 		}
 	}
 
@@ -1034,6 +1219,7 @@ sub mail_cgi {
 		"--vertical-label=$vlabel",
 		"--width=$width",
 		"--height=$height",
+		@extra,
 		@riglim,
 		$zoom,
 		@{$cgi->{version12}},
@@ -1048,7 +1234,7 @@ sub mail_cgi {
 		@tmp,
 		"COMMENT: \\n");
 	$err = RRDs::error;
-	print("ERROR: while graphing $IMG_DIR" . "$IMG2: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG2: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
 		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG2z",
@@ -1058,6 +1244,7 @@ sub mail_cgi {
 			"--vertical-label=$vlabel",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -1070,12 +1257,12 @@ sub mail_cgi {
 			"CDEF:K_out=B_out,1024,/",
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG2z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG2z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /mail2/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "' border='0'></a>\n");
 			} else {
 				if($version eq "new") {
 					$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -1084,16 +1271,16 @@ sub mail_cgi {
 					$picz_width = $width + 115;
 					$picz_height = $height + 100;
 				}
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG2 . "'>\n");
 		}
 	}
 
 	if($title) {
-		print("    </td>\n");
-		print("    <td valign='top' bgcolor='" . $colors->{title_bg_color} . "'>\n");
+		push(@output, "    </td>\n");
+		push(@output, "    <td valign='top' bgcolor='" . $colors->{title_bg_color} . "'>\n");
 	}
 	@riglim = @{setup_riglim($rigid[2], $limit[2])};
 	undef(@tmp);
@@ -1125,6 +1312,7 @@ sub mail_cgi {
 		"--vertical-label=Messages",
 		"--width=$width",
 		"--height=$height",
+		@extra,
 		@riglim,
 		$zoom,
 		@{$cgi->{version12}},
@@ -1135,7 +1323,7 @@ sub mail_cgi {
 		@CDEF,
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $IMG_DIR" . "$IMG3: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG3: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
 		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG3z",
@@ -1145,6 +1333,7 @@ sub mail_cgi {
 			"--vertical-label=Messages",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -1155,12 +1344,12 @@ sub mail_cgi {
 			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG3z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG3z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /mail3/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "' border='0'></a>\n");
 			} else {
 				if($version eq "new") {
 					$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -1169,10 +1358,10 @@ sub mail_cgi {
 					$picz_width = $width + 115;
 					$picz_height = $height + 100;
 				}
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG3 . "'>\n");
 		}
 	}
 
@@ -1206,6 +1395,7 @@ sub mail_cgi {
 		"--vertical-label=bytes",
 		"--width=$width",
 		"--height=$height",
+		@extra,
 		@riglim,
 		$zoom,
 		@{$cgi->{version12}},
@@ -1217,7 +1407,7 @@ sub mail_cgi {
 		"CDEF:K_queues=queues,1024,/",
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $IMG_DIR" . "$IMG4: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG4: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
 		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG4z",
@@ -1227,6 +1417,7 @@ sub mail_cgi {
 			"--vertical-label=bytes",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -1237,12 +1428,12 @@ sub mail_cgi {
 			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG4z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG4z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /mail4/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4 . "' border='0'></a>\n");
 			} else {
 				if($version eq "new") {
 					$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -1251,10 +1442,10 @@ sub mail_cgi {
 					$picz_width = $width + 115;
 					$picz_height = $height + 100;
 				}
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG4 . "'>\n");
 		}
 	}
 
@@ -1295,6 +1486,7 @@ sub mail_cgi {
 		"--vertical-label=Messages",
 		"--width=$width",
 		"--height=$height",
+		@extra,
 		@riglim,
 		$zoom,
 		@{$cgi->{version12}},
@@ -1308,7 +1500,7 @@ sub mail_cgi {
 		@CDEF,
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $IMG_DIR" . "$IMG5: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG5: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
 		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG5z",
@@ -1318,6 +1510,7 @@ sub mail_cgi {
 			"--vertical-label=Messages",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -1331,12 +1524,12 @@ sub mail_cgi {
 			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG5z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG5z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /mail5/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5 . "' border='0'></a>\n");
 			} else {
 				if($version eq "new") {
 					$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -1345,10 +1538,10 @@ sub mail_cgi {
 					$picz_width = $width + 115;
 					$picz_height = $height + 100;
 				}
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG5 . "'>\n");
 		}
 	}
 
@@ -1356,19 +1549,35 @@ sub mail_cgi {
 	undef(@tmp);
 	undef(@tmpz);
 	undef(@CDEF);
-	push(@tmp, "AREA:greylisted#4444EE:Greylisted");
-	push(@tmp, "GPRINT:greylisted:LAST:           Current\\: %5.0lf\\n");
-	push(@tmp, "AREA:whitelisted#44EEEE:Whitelisted");
-	push(@tmp, "GPRINT:whitelisted:LAST:          Current\\: %5.0lf\\n");
-	push(@tmp, "LINE2:greylisted#0000EE");
-	push(@tmp, "LINE2:whitelisted#00EEEE");
-	push(@tmp, "LINE2:records#EE0000:Records");
-	push(@tmp, "GPRINT:records:LAST:              Current\\: %5.0lf\\n");
-	push(@tmpz, "AREA:greylisted#4444EE:Greylisted");
-	push(@tmpz, "AREA:whitelisted#44EEEE:Whitelisted");
-	push(@tmpz, "LINE2:greylisted#0000EE");
-	push(@tmpz, "LINE2:whitelisted#00EEEE");
-	push(@tmpz, "LINE2:records#EE0000:Records");
+	if(lc($mail->{greylist}) eq "milter-greylist") {
+		push(@tmp, "AREA:greylisted#4444EE:Greylisted");
+		push(@tmp, "GPRINT:greylisted:LAST:           Current\\: %5.0lf\\n");
+		push(@tmp, "AREA:whitelisted#44EEEE:Whitelisted");
+		push(@tmp, "GPRINT:whitelisted:LAST:          Current\\: %5.0lf\\n");
+		push(@tmp, "LINE2:greylisted#0000EE");
+		push(@tmp, "LINE2:whitelisted#00EEEE");
+		push(@tmp, "LINE2:records#EE0000:Records");
+		push(@tmp, "GPRINT:records:LAST:              Current\\: %5.0lf\\n");
+		push(@tmpz, "AREA:greylisted#4444EE:Greylisted");
+		push(@tmpz, "AREA:whitelisted#44EEEE:Whitelisted");
+		push(@tmpz, "LINE2:greylisted#0000EE");
+		push(@tmpz, "LINE2:whitelisted#00EEEE");
+		push(@tmpz, "LINE2:records#EE0000:Records");
+	}
+	if(lc($mail->{greylist}) eq "postgrey") {
+		push(@tmp, "LINE2:greylisted#0000EE:Greylisted");
+		push(@tmp, "GPRINT:greylisted:LAST:           Current\\: $gl_valform\\n");
+		push(@tmp, "LINE2:delayed#EEEE00:Delayed");
+		push(@tmp, "GPRINT:delayed:LAST:              Current\\: $gl_valform\\n");
+		push(@tmp, "LINE2:whitelisted#00EEEE:Whitelisted");
+		push(@tmp, "GPRINT:whitelisted:LAST:          Current\\: $gl_valform\\n");
+		push(@tmp, "LINE2:records#EE00EE:Passed");
+		push(@tmp, "GPRINT:records:LAST:               Current\\: $gl_valform\\n");
+		push(@tmpz, "LINE2:greylisted#0000EE:Greylisted");
+		push(@tmpz, "LINE2:delayed#EEEE00:Delayed");
+		push(@tmpz, "LINE2:whitelisted#00EEEE:Whitelisted");
+		push(@tmpz, "LINE2:records#EE00EE:Passed");
+	}
 	if(lc($config->{show_gaps}) eq "y") {
 		push(@tmp, "AREA:wrongdata#$colors->{gap}:");
 		push(@tmpz, "AREA:wrongdata#$colors->{gap}:");
@@ -1387,9 +1596,10 @@ sub mail_cgi {
 		"--title=$config->{graphs}->{_mail6}  ($tf->{nwhen}$tf->{twhen})",
 		"--start=-$tf->{nwhen}$tf->{twhen}",
 		"--imgformat=$imgfmt_uc",
-		"--vertical-label=Messages",
+		"--vertical-label=$rate_label",
 		"--width=$width",
 		"--height=$height",
+		@extra,
 		@riglim,
 		$zoom,
 		@{$cgi->{version12}},
@@ -1398,20 +1608,22 @@ sub mail_cgi {
 		"DEF:records=$rrd:mail_val07:AVERAGE",
 		"DEF:greylisted=$rrd:mail_val08:AVERAGE",
 		"DEF:whitelisted=$rrd:mail_val09:AVERAGE",
-		"CDEF:allvalues=records,greylisted,whitelisted,+,+",
+		"DEF:delayed=$rrd:mail_val10:AVERAGE",
+		"CDEF:allvalues=records,greylisted,whitelisted,delayed,+,+,+",
 		@CDEF,
 		@tmp);
 	$err = RRDs::error;
-	print("ERROR: while graphing $IMG_DIR" . "$IMG6: $err\n") if $err;
+	push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG6: $err\n") if $err;
 	if(lc($config->{enable_zoom}) eq "y") {
 		($width, $height) = split('x', $config->{graph_size}->{zoom});
 		$picz = $rrd{$version}->("$IMG_DIR" . "$IMG6z",
 			"--title=$config->{graphs}->{_mail6}  ($tf->{nwhen}$tf->{twhen})",
 			"--start=-$tf->{nwhen}$tf->{twhen}",
 			"--imgformat=$imgfmt_uc",
-			"--vertical-label=Messages",
+			"--vertical-label=$rate_label",
 			"--width=$width",
 			"--height=$height",
+			@extra,
 			@riglim,
 			$zoom,
 			@{$cgi->{version12}},
@@ -1420,16 +1632,17 @@ sub mail_cgi {
 			"DEF:records=$rrd:mail_val07:AVERAGE",
 			"DEF:greylisted=$rrd:mail_val08:AVERAGE",
 			"DEF:whitelisted=$rrd:mail_val09:AVERAGE",
-			"CDEF:allvalues=records,greylisted,whitelisted,+,+",
+			"DEF:delayed=$rrd:mail_val10:AVERAGE",
+			"CDEF:allvalues=records,greylisted,whitelisted,delayed,+,+,+",
 			@CDEF,
 			@tmpz);
 		$err = RRDs::error;
-		print("ERROR: while graphing $IMG_DIR" . "$IMG6z: $err\n") if $err;
+		push(@output, "ERROR: while graphing $IMG_DIR" . "$IMG6z: $err\n") if $err;
 	}
 	if($title || ($silent =~ /imagetag/ && $graph =~ /mail6/)) {
 		if(lc($config->{enable_zoom}) eq "y") {
 			if(lc($config->{disable_javascript_void}) eq "y") {
-				print("      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG6z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG6 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"" . $config->{url} . "/" . $config->{imgs_dir} . $IMG6z . "\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG6 . "' border='0'></a>\n");
 			} else {
 				if($version eq "new") {
 					$picz_width = $picz->{image_width} * $config->{global_zoom};
@@ -1438,20 +1651,20 @@ sub mail_cgi {
 					$picz_width = $width + 115;
 					$picz_height = $height + 100;
 				}
-				print("      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG6z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG6 . "' border='0'></a>\n");
+				push(@output, "      <a href=\"javascript:void(window.open('" . $config->{url} . "/" . $config->{imgs_dir} . $IMG6z . "','','width=" . $picz_width . ",height=" . $picz_height . ",scrollbars=0,resizable=0'))\"><img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG6 . "' border='0'></a>\n");
 			}
 		} else {
-			print("      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG6 . "'>\n");
+			push(@output, "      <img src='" . $config->{url} . "/" . $config->{imgs_dir} . $IMG6 . "'>\n");
 		}
 	}
 
 	if($title) {
-		print("    </td>\n");
-		print("    </tr>\n");
-		main::graph_footer();
+		push(@output, "    </td>\n");
+		push(@output, "    </tr>\n");
+		push(@output, main::graph_footer());
 	}
-	print("  <br>\n");
-	return;
+	push(@output, "  <br>\n");
+	return @output;
 }
 
 1;
